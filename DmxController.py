@@ -201,7 +201,8 @@ class DmxController:
 
     def _send_dmx(self, address: int, payload: bytes, name: str = ""):
         if self.test_mode:
-            self.logger.info(f"Update {name}")
+            channels_str = ", ".join(f"[{address + i}]: {val}" for i, val in enumerate(payload))
+            self.logger.info(f"Update {name} -> {channels_str}")
         else:
             self.dmx_sender.send_message(address, payload)
 
