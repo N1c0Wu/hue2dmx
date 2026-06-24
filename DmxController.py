@@ -157,11 +157,16 @@ class DmxController:
         threading.Thread(target=heartbeat, daemon=True).start()
 
     def _validate_fixtures(self):
-        """Validates that all DMX fixtures are mapped to existing Hue lights."""
+        """Validates that all mapped Hue lights exist in the Hue bridge."""
+        if not hasattr(self, "palette_mgr") or not self.palette_mgr:
+            return
+            
         hue_bulbs = self.hue_bridge.list_light_ids_and_names()
-        for fixture in self.dmx_fixtures:
-            if fixture.hue_light_id not in hue_bulbs:
-                self.logger.error(f"Hue ID for fixture '{fixture.name}' cannot be found.")
+        for hue_id in self.palette_mgr._lamp_to_palette_ids.keys():
+            if not hue_id:  # skip empty ids
+                continue
+            if hue_id not in hue_bulbs:
+                self.logger.error(f"Hue ID '{hue_id}' specified in your palettes cannot be found on the bridge.")
                 self.logger.info("Valid IDs:")
                 for key, value in hue_bulbs.items():
                     self.logger.info(f"    {key}: {value}")

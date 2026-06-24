@@ -70,9 +70,15 @@ class PaletteManager:
         for pid in impacted:
             cfg = self._palettes[pid]
             a = self._lamp_rgb.get(cfg.lamp_a)
-            b = self._lamp_rgb.get(cfg.lamp_b)
-            if a is None or b is None:
+            if a is None:
                 continue
+                
+            if cfg.mode in ("blend", "complementary", "analogous"):
+                b = self._lamp_rgb.get(cfg.lamp_b)
+                if b is None:
+                    continue
+            else:
+                b = (0, 0, 0)
             lst, hex_map = build_two_lamp_palette(
                 a, b, mode=cfg.mode, max_distance=cfg.max_distance, analogous_shift_deg=cfg.analogous_shift_deg, interpolation=cfg.interpolation
             )
