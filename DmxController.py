@@ -15,7 +15,6 @@ from PaletteManager import PaletteManager, PaletteConfig
 from YamlRgbFixture import YamlRgbFixture
 from YamlSteadyFixture import YamlSteadyFixture
 
-test_mode = os.getenv('STUB_DMX', 'false').lower() == 'true'
 
 
 class DmxController:
@@ -65,7 +64,8 @@ class DmxController:
         self.dmx_fixtures = self._load_dmx_fixtures()
 
         self.logger.info("Initializing DMX sender")
-        self.dmx_sender = DmxSender(logger=self.logger)
+        self.test_mode = os.getenv('STUB_DMX', 'false').lower() == 'true'
+        self.dmx_sender = DmxSender(logger=self.logger, stub_mode=self.test_mode)
 
         self.logger.info("Connecting to Hue bridge")
         self.hue_bridge = HueBridge(
@@ -103,6 +103,7 @@ class DmxController:
                 mode=str(p.get("mode", "blend")).lower(),
                 max_distance=int(p.get("max_distance", 100)),
                 analogous_shift_deg=float(p.get("analogous_shift_deg", 20.0)),
+                interpolation=str(p.get("interpolation", "smooth")).lower()
             ))
 
         fixtures = []
@@ -131,34 +132,17 @@ class DmxController:
         yaml_fixtures = self._load_from_yaml()
         if yaml_fixtures is not None:
             return yaml_fixtures
-        result = []
-        try:
-            i = 1
-            while True:
-                name = os.getenv(f"FIXTURE{i}_NAME")
-                hue_id = os.getenv(f"FIXTURE{i}_HUE_ID")
-                dmx_address = int(os.getenv(f"FIXTURE{i}_DMX_ADDRESS", "0"))
-                class_name = os.getenv(f"FIXTURE{i}_CLASS")
-                if name and hue_id and dmx_address and class_name:
-                    self.logger.info(f"    {name}: dmx_address={dmx_address}, hue_id={hue_id}")
-                    module = __import__(class_name)
-                    dmx_fixture_sub_class = getattr(module, class_name)
-                    fixture = dmx_fixture_sub_class(name, hue_id, dmx_address)
-                    result.append(fixture)
-                    i += 1
-                else:
-                    break
-        except Exception as e:
-            self.logger.error(f"Error loading DMX fixtures: {e}")
-        return result
+        self.logger.error("No fixtures YAML loaded. Make sure FIXTURES_YAML is set.")
+        exit(1)
 
     def send_heartbeat(self):
         """Sends periodic updates to the Hue bridge to prevent timeouts."""
         def heartbeat():
             while True:
                 try:
-                    hue_id = os.getenv("FIXTURE1_HUE_ID")
-                    if not hue_id:
+                    if hasattr(self, "palette_mgr") and getattr(self, "palette_mgr", None) and self.palette_mgr._lamp_to_palette_ids:
+                        hue_id = list(self.palette_mgr._lamp_to_palette_ids.keys())[0]
+                    else:
                         self.logger.warning("No Hue ID specified for heartbeat.")
                         return
 
@@ -183,44 +167,7 @@ class DmxController:
                     self.logger.info(f"    {key}: {value}")
                 exit(1)
 
-    def _schedule_updates(self, changed_hue_ids: List[str]):
-        """Adds updates to the queue while ensuring controlled processing."""
-        with self.update_lock:
-            for hue_id in changed_hue_ids:
-                if hue_id not in self.update_queue:
-                    self.update_queue.append(hue_id)
 
-        threading.Thread(target=self._process_updates, daemon=True).start()
-
-    def _process_updates(self):
-        """Processes the update queue while ensuring only 5 concurrent updates."""
-        while True:
-            with self.update_lock:
-                if not self.update_queue:
-                    break
-
-                fixture_id = self.update_queue.popleft()
-
-            self.semaphore.acquire()
-            threading.Thread(target=self._update_fixture, args=(fixture_id,), daemon=True).start()
-
-    def _update_fixture(self, fixture_id: str):
-        """Updates a single fixture and releases the semaphore when done."""
-        try:
-            fixture = next(f for f in self.dmx_fixtures if f.hue_light_id == fixture_id)
-            fixture.hueLamp = self.hue_bridge.get_light(fixture.hue_light_id)
-            dmx_message = fixture.get_dmx_message()
-
-            self._send_dmx(fixture.dmx_address, dmx_message, fixture.name)
-
-        except StopIteration:
-            self.logger.warning(f"Fixture with Hue ID {fixture_id} not found.")
-
-        except Exception as e:
-            self.logger.error(f"Error updating fixture {fixture_id}: {e}")
-
-        finally:
-            self.semaphore.release()
 
     def track_and_update_fixtures(self):
         """Listens for Hue bridge events and synchronizes updates with DMX fixtures."""
@@ -231,7 +178,7 @@ class DmxController:
                     if not self.running_as_service:
                         self.logger.info(json.dumps(event, indent=4))
                     if self._contains_button_short_release(event):
-                        changed_hue_ids = [fixture.hue_light_id for fixture in self.dmx_fixtures]
+                        changed_hue_ids = list(self.palette_mgr._lamp_to_palette_ids.keys())
                     else:
                         changed_hue_ids = [obj["id"] for obj in event.get("data", []) if "id" in obj]
 
@@ -242,13 +189,11 @@ class DmxController:
                                 self._handle_hue_light_event(light)
                             except Exception as e:
                                 self.logger.warning("Failed to handle event for %s: %s", lid, e)
-                    else:
-                        self._schedule_updates(changed_hue_ids)
 
             time.sleep(60)  # Retry connection every minute if disconnected
 
     def _send_dmx(self, address: int, payload: bytes, name: str = ""):
-        if test_mode:
+        if self.test_mode:
             self.logger.info(f"Update {name}")
         else:
             self.dmx_sender.send_message(address, payload)
@@ -260,12 +205,6 @@ class DmxController:
                 for fx in self.palette_mgr.fixtures_for(pid):
                     payload = fx.get_dmx_message()
                     self._send_dmx(fx.dmx_address, payload, fx.name)
-            return
-        for fx in self.dmx_fixtures:
-            if fx.hue_light_id == light.id:
-                fx.hueLamp = light
-                payload = fx.get_dmx_message()
-                self._send_dmx(fx.dmx_address, payload, fx.name)
 
     @staticmethod
     def _contains_button_short_release(event: dict) -> bool:

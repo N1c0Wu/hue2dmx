@@ -8,13 +8,14 @@ import logging
 Rgb = Tuple[int, int, int]
 
 class PaletteConfig:
-    def __init__(self, pid: str, lamp_a: str, lamp_b: str, mode: str, max_distance: int, analogous_shift_deg: float):
+    def __init__(self, pid: str, lamp_a: str, lamp_b: str, mode: str, max_distance: int, analogous_shift_deg: float, interpolation: str = "smooth"):
         self.id = pid
         self.lamp_a = lamp_a
         self.lamp_b = lamp_b
         self.mode = mode
         self.max_distance = max_distance
         self.analogous_shift_deg = analogous_shift_deg
+        self.interpolation = interpolation
 
 class PaletteManager:
     """
@@ -73,7 +74,7 @@ class PaletteManager:
             if a is None or b is None:
                 continue
             lst, hex_map = build_two_lamp_palette(
-                a, b, mode=cfg.mode, max_distance=cfg.max_distance, analogous_shift_deg=cfg.analogous_shift_deg
+                a, b, mode=cfg.mode, max_distance=cfg.max_distance, analogous_shift_deg=cfg.analogous_shift_deg, interpolation=cfg.interpolation
             )
             self._palette_rgb_list[pid] = lst
             self._palette_hex_map[pid] = hex_map

@@ -15,3 +15,28 @@ def test_complementary_differs():
 def test_analogous_with_shift():
     lst,_ = build_two_lamp_palette((200,200,0),(0,200,200),mode="analogous",max_distance=7,analogous_shift_deg=30)
     assert len(lst) == 7
+
+def test_triadic_discrete():
+    # Triadic has 3 colors. Max distance 6 means we should snap to exactly 3 colors
+    lst,_ = build_two_lamp_palette((255,0,0),(0,0,0),mode="triadic",max_distance=6,interpolation="discrete")
+    # Using a set should yield exactly 3 unique RGB values
+    unique_colors = set(lst)
+    assert len(unique_colors) == 3
+
+def test_triadic_smooth():
+    # Smooth interpolation should yield multiple intermediate colors
+    lst,_ = build_two_lamp_palette((255,0,0),(0,0,0),mode="triadic",max_distance=6,interpolation="smooth")
+    unique_colors = set(lst)
+    assert len(unique_colors) > 3
+
+def test_tetradic():
+    lst,_ = build_two_lamp_palette((0,255,0),(0,0,0),mode="tetradic",max_distance=4,interpolation="discrete")
+    assert len(set(lst)) == 4
+
+def test_split_complementary():
+    lst,_ = build_two_lamp_palette((0,0,255),(0,0,0),mode="split_complementary",max_distance=3,interpolation="discrete")
+    assert len(set(lst)) == 3
+
+def test_to_complement():
+    lst,_ = build_two_lamp_palette((255,0,0),(0,0,0),mode="to_complement",max_distance=2,interpolation="discrete")
+    assert len(set(lst)) == 2

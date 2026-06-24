@@ -17,9 +17,11 @@ class DmxSender:
     # According to DMX512, when sending a message to a fixture, we need to repeat the untouched DMX
     # channels. For this reason channel data is buffered in dmx_data.
 
-    def __init__(self, logger: Logger):
+    def __init__(self, logger: Logger, stub_mode: bool = False):
         self.logger = logger
-        self.init_ftdi_driver()
+        self.stub_mode = stub_mode
+        if not self.stub_mode:
+            self.init_ftdi_driver()
 
     def init_ftdi_driver(self):
         try:
@@ -48,6 +50,8 @@ class DmxSender:
             raise e
 
     def send_message(self, address: int, data: bytes):
+        if self.stub_mode:
+            return
         assert self.ftdi_serial, "FTDI driver is not initialized"
         try:
             self.dmx_data[address:address + len(data)] = data
