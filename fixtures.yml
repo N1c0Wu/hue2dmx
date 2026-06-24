@@ -1,0 +1,35 @@
+hue:
+  bridge_ip: 192.168.0.140
+  api_key: YOUR_API_KEY
+  timeout_sec: 240
+
+dmx:
+  stub: true
+
+palettes:
+  - id: main
+    type: two_lamps
+    hue_light_ids:
+      - "UUID-Lamp-A"
+      - "UUID-Lamp-B"
+    mode: blend
+    max_distance: 100
+    analogous_shift_deg: 20
+
+fixtures:
+  - name: WashLeft
+    type: rgb
+    palette: main
+    distance: 20
+    channels: { r: 1, g: 2, b: 3 }
+    steady: { "4": 255 }
+
+  - name: WashRight
+    type: rgb
+    palette: main
+    distance: 80
+    channels: { r: 5, g: 6, b: 7 }
+
+  - name: Hazer
+    type: steady
+    channels: { "10": 255, "11": 0 }
