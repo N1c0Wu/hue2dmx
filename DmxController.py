@@ -189,6 +189,8 @@ class DmxController:
 
                     if hasattr(self, "palette_mgr") and getattr(self, "palette_mgr", None):
                         for lid in changed_hue_ids:
+                            if not lid or lid not in self.palette_mgr._lamp_to_palette_ids:
+                                continue
                             try:
                                 light = self.hue_bridge.get_light(lid)
                                 self._handle_hue_light_event(light)
