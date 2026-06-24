@@ -21,7 +21,9 @@ There is no need for "dummy" or offline Hue bulbs. Just map the DMX fixtures dir
 - **Interpolation**: Choose between `smooth` (continuous gradient) and `discrete` (tuples/snapping strictly to exact theoretical colors).
 
 ## DMX Controller
-In order to integrate DMX in your Hue system you need a DMX controller. This script is designed for FTDI-based USB DMX controllers (like the ENTTEC DMX USB Pro). *Note: ENTTEC OPEN DMX PRO is not supported.*
+In order to integrate DMX in your Hue system you need a DMX controller. This script is designed for FTDI-based bit-banging USB DMX controllers, such as the **ENTTEC Open DMX USB**. 
+
+*Note: The more expensive **ENTTEC DMX USB PRO** is **not** supported, as it uses a different protocol rather than raw FTDI bit-banging.*
 
 ## Script Configuration
 
