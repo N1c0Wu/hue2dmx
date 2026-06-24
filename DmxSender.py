@@ -8,20 +8,20 @@ from logging import Logger
 from pylibftdi import Device, Driver
 
 
+import threading
+
 class DmxSender:
-    ftdi_serial: str = None
-    dmx_data = bytearray(513)
-
-    # 513: one start byte (0x00) plus 512 bytes of channel data
-    # dmx_data is automatically filled with zeros, incidentally also correctly setting the start byte.
-    # According to DMX512, when sending a message to a fixture, we need to repeat the untouched DMX
-    # channels. For this reason channel data is buffered in dmx_data.
-
     def __init__(self, logger: Logger, stub_mode: bool = False):
         self.logger = logger
         self.stub_mode = stub_mode
+        self.ftdi_serial: str = None
+        self.dmx_data = bytearray(513)
+        self._running = False
+        self._thread = None
+        
         if not self.stub_mode:
             self.init_ftdi_driver()
+            self._start_loop()
 
     def init_ftdi_driver(self):
         try:
@@ -47,19 +47,29 @@ class DmxSender:
 
         except Exception as e:
             self.logger.error("Error initializing FTDI driver: %s", e)
-            raise e
+            sys.exit(1)
+
+    def _start_loop(self):
+        self._running = True
+        self._thread = threading.Thread(target=self._transmit_loop, daemon=True)
+        self._thread.start()
+        self.logger.info("Started DMX transmission loop.")
+
+    def _transmit_loop(self):
+        try:
+            with Device(self.ftdi_serial) as ftdi_port:
+                while self._running:
+                    self.send_dmx_packet(ftdi_port, self.dmx_data)
+                    time.sleep(0.025)  # roughly 40Hz
+        except Exception as e:
+            self.logger.error("DMX transmit loop crashed: %s", e)
 
     def send_message(self, address: int, data: bytes):
         if self.stub_mode:
             return
         assert self.ftdi_serial, "FTDI driver is not initialized"
-        try:
-            self.dmx_data[address:address + len(data)] = data
-            # address equals offset because DMX addresses start with 1 skipping the start byte in the data packet.
-            with Device(self.ftdi_serial) as ftdi_port:
-                self.send_dmx_packet(ftdi_port, self.dmx_data)
-        except Exception as e:
-            self.logger.error("Cannot send dmx packet: %s", e)
+        # Just update the buffer in memory! The transmit loop will pick it up instantly.
+        self.dmx_data[address:address + len(data)] = data
 
     @staticmethod
     def send_dmx_packet(ftdi_port: Device, data: bytes):

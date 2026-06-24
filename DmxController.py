@@ -245,8 +245,23 @@ class DmxController:
                     return True
         return False
 
+    def _force_initial_dmx(self):
+        self.logger.info("Sending initial DMX states...")
+        # Force update for all cached Hue lights
+        for lid, light in self._cached_lights.items():
+            try:
+                self._handle_hue_light_event(light)
+            except Exception as e:
+                self.logger.warning("Initial update failed for %s: %s", lid, e)
+                
+        # Force update for steady fixtures
+        for fx in self.dmx_fixtures:
+            if type(fx).__name__ == "YamlSteadyFixture":
+                payload = fx.get_dmx_message()
+                self._send_dmx(fx.dmx_address, payload, fx.name)
 
 if __name__ == "__main__":
     controller = DmxController()
     controller.send_heartbeat()  # Start sending heartbeat updates
+    controller._force_initial_dmx()  # Set initial DMX outputs before listening
     controller.track_and_update_fixtures()  # Start listening for updates
