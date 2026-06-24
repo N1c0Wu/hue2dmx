@@ -161,7 +161,7 @@ class DmxController:
         threading.Thread(target=heartbeat, daemon=True).start()
 
     def _validate_fixtures(self):
-        """Validates that all mapped Hue lights exist in the Hue bridge and caches their state."""
+        """Validates that all mapped Hue lights exist in the Hue bridge."""
         if not hasattr(self, "palette_mgr") or not self.palette_mgr:
             return
             
