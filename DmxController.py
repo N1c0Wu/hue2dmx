@@ -159,11 +159,13 @@ class DmxController:
         threading.Thread(target=heartbeat, daemon=True).start()
 
     def _validate_fixtures(self):
-        """Validates that all mapped Hue lights exist in the Hue bridge."""
+        """Validates that all mapped Hue lights exist in the Hue bridge and caches their state."""
         if not hasattr(self, "palette_mgr") or not self.palette_mgr:
             return
             
         hue_bulbs = self.hue_bridge.list_light_ids_and_names()
+        self._cached_lights = {}
+        
         for hue_id in self.palette_mgr._lamp_to_palette_ids.keys():
             if not hue_id:  # skip empty ids
                 continue
@@ -173,8 +175,9 @@ class DmxController:
                 for key, value in hue_bulbs.items():
                     self.logger.info(f"    {key}: {value}")
                 exit(1)
-
-
+            
+            # Cache the initial full state so we don't need to do HTTP GETs later
+            self._cached_lights[hue_id] = self.hue_bridge.get_light(hue_id)
 
     def track_and_update_fixtures(self):
         """Listens for Hue bridge events and synchronizes updates with DMX fixtures."""
@@ -184,20 +187,33 @@ class DmxController:
                 if event["type"] == "update":
                     if not self.running_as_service:
                         self.logger.info(json.dumps(event, indent=4))
-                    if self._contains_button_short_release(event):
-                        changed_hue_ids = list(self.palette_mgr._lamp_to_palette_ids.keys())
-                    else:
-                        changed_hue_ids = [obj["id"] for obj in event.get("data", []) if "id" in obj]
-
-                    if hasattr(self, "palette_mgr") and getattr(self, "palette_mgr", None):
-                        for lid in changed_hue_ids:
-                            if not lid or lid not in self.palette_mgr._lamp_to_palette_ids:
-                                continue
-                            try:
-                                light = self.hue_bridge.get_light(lid)
-                                self._handle_hue_light_event(light)
-                            except Exception as e:
-                                self.logger.warning("Failed to handle event for %s: %s", lid, e)
+                        
+                    for item in event.get("data", []):
+                        lid = item.get("id")
+                        if not lid or lid not in self.palette_mgr._lamp_to_palette_ids:
+                            continue
+                            
+                        light = self._cached_lights.get(lid)
+                        if not light:
+                            continue
+                            
+                        # Apply deltas from the SSE event directly to our cached light model
+                        if "color" in item and "xy" in item["color"]:
+                            if light.color and light.color.xy:
+                                light.color.xy.x = item["color"]["xy"].get("x", light.color.xy.x)
+                                light.color.xy.y = item["color"]["xy"].get("y", light.color.xy.y)
+                        if "dimming" in item and "brightness" in item["dimming"]:
+                            if light.dimming:
+                                light.dimming.brightness = item["dimming"].get("brightness", light.dimming.brightness)
+                        if "on" in item and "on" in item["on"]:
+                            if light.on:
+                                light.on.on = item["on"].get("on", light.on.on)
+                                
+                        try:
+                            # Push instantaneous update
+                            self._handle_hue_light_event(light)
+                        except Exception as e:
+                            self.logger.warning("Failed to handle event for %s: %s", lid, e)
 
             time.sleep(60)  # Retry connection every minute if disconnected
 
