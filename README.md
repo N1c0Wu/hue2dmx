@@ -82,3 +82,48 @@ You must pass the path to this file via the `FIXTURES_YAML` environment variable
 export FIXTURES_YAML=./fixtures.yml
 python3 hue-dmx.py
 ```
+
+## Running as a Background Service (Linux/Raspberry Pi)
+
+To run the script automatically in the background whenever your system boots, you can set up a `systemd` service.
+
+1. **Create a service file**:
+   ```bash
+   sudo nano /etc/systemd/system/hue2dmx.service
+   ```
+
+2. **Paste the following configuration**: *(Adjust the `/home/pi/hue2dmx` paths if your project is located elsewhere)*
+   ```ini
+   [Unit]
+   Description=Hue to DMX Controller
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   Type=simple
+   User=pi
+   WorkingDirectory=/home/pi/hue2dmx
+   # Set the environment variables
+   Environment="FIXTURES_YAML=/home/pi/hue2dmx/fixtures.yml"
+   Environment="RUNNING_AS_SERVICE=true"
+   # Use the Python executable from inside your virtual environment
+   ExecStart=/home/pi/hue2dmx/venv/bin/python3 hue-dmx.py
+
+   Restart=always
+   RestartSec=10
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+3. **Enable and start the service**:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable hue2dmx.service
+   sudo systemctl start hue2dmx.service
+   ```
+
+4. **View live logs**:
+   ```bash
+   sudo journalctl -u hue2dmx.service -f
+   ```

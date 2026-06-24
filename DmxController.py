@@ -90,8 +90,10 @@ class DmxController:
             os.environ["HUE_API_KEY"] = str(hue_cfg["api_key"])
         if "timeout_sec" in hue_cfg:
             os.environ["HUE_TIMEOUT_SEC"] = str(hue_cfg["timeout_sec"])
-        if (cfg.get("dmx") or {}).get("stub") is True:
-            os.environ["STUB_DMX"] = "true"
+        
+        dmx_cfg = cfg.get("dmx") or {}
+        if "stub" in dmx_cfg:
+            os.environ["STUB_DMX"] = "true" if dmx_cfg["stub"] else "false"
 
         pm = PaletteManager(self.logger)
 
