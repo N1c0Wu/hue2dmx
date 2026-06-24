@@ -14,7 +14,7 @@ from HueBridge import HueBridge
 from PaletteManager import PaletteManager, PaletteConfig
 from YamlRgbFixture import YamlRgbFixture
 from YamlSteadyFixture import YamlSteadyFixture
-
+from HueModel import Point, Color, Dimming, On
 
 
 class DmxController:
@@ -165,7 +165,6 @@ class DmxController:
             
         hue_bulbs = self.hue_bridge.list_light_ids_and_names()
         self._cached_lights = {}
-        
         for hue_id in self.palette_mgr._lamp_to_palette_ids.keys():
             if not hue_id:  # skip empty ids
                 continue
@@ -177,7 +176,10 @@ class DmxController:
                 exit(1)
             
             # Cache the initial full state so we don't need to do HTTP GETs later
+            self.logger.info(f"Caching initial state for Hue light: {hue_id}")
             self._cached_lights[hue_id] = self.hue_bridge.get_light(hue_id)
+
+
 
     def track_and_update_fixtures(self):
         """Listens for Hue bridge events and synchronizes updates with DMX fixtures."""
@@ -187,33 +189,60 @@ class DmxController:
                 if event["type"] == "update":
                     if not self.running_as_service:
                         self.logger.info(json.dumps(event, indent=4))
-                        
+                    
+                    if self._contains_button_short_release(event):
+                        self.logger.info("Button short release detected. Refreshing cache and syncing all lights...")
+                        for lid in self.palette_mgr._lamp_to_palette_ids.keys():
+                            if not lid:
+                                continue
+                            try:
+                                light = self.hue_bridge.get_light(lid)
+                                self._cached_lights[lid] = light
+                                self._handle_hue_light_event(light)
+                            except Exception as e:
+                                self.logger.warning("Failed to refresh state for %s: %s", lid, e)
+                        continue
+
+                    # Process updates by applying deltas locally to cached models
                     for item in event.get("data", []):
                         lid = item.get("id")
                         if not lid or lid not in self.palette_mgr._lamp_to_palette_ids:
                             continue
-                            
+                        
                         light = self._cached_lights.get(lid)
                         if not light:
                             continue
-                            
+                        
                         # Apply deltas from the SSE event directly to our cached light model
+                        updated = False
                         if "color" in item and "xy" in item["color"]:
                             if light.color and light.color.xy:
                                 light.color.xy.x = item["color"]["xy"].get("x", light.color.xy.x)
                                 light.color.xy.y = item["color"]["xy"].get("y", light.color.xy.y)
+                                updated = True
+                            elif not light.color:
+                                light.color = Color(xy=Point(x=item["color"]["xy"].get("x", 0.0), y=item["color"]["xy"].get("y", 0.0)))
+                                updated = True
                         if "dimming" in item and "brightness" in item["dimming"]:
                             if light.dimming:
                                 light.dimming.brightness = item["dimming"].get("brightness", light.dimming.brightness)
+                                updated = True
+                            elif not light.dimming:
+                                light.dimming = Dimming(brightness=item["dimming"].get("brightness", 100.0))
+                                updated = True
                         if "on" in item and "on" in item["on"]:
                             if light.on:
                                 light.on.on = item["on"].get("on", light.on.on)
-                                
-                        try:
-                            # Push instantaneous update
-                            self._handle_hue_light_event(light)
-                        except Exception as e:
-                            self.logger.warning("Failed to handle event for %s: %s", lid, e)
+                                updated = True
+                            elif not light.on:
+                                light.on = On(on=item["on"].get("on", False))
+                                updated = True
+                        
+                        if updated:
+                            try:
+                                self._handle_hue_light_event(light)
+                            except Exception as e:
+                                self.logger.warning("Failed to handle event for %s: %s", lid, e)
 
             time.sleep(60)  # Retry connection every minute if disconnected
 
