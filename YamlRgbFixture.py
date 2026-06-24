@@ -26,8 +26,8 @@ class YamlRgbFixture(DmxFixture):
         self.palette_id = palette_id
         self.palette_mgr = palette_mgr
 
-    def get_dmx_message(self) -> bytes:
-        R, G, B = self.palette_mgr.get_color_for(self.palette_id, self.distance)
+    def get_dmx_message(self, offset: float = 0.0) -> bytes:
+        R, G, B = self.palette_mgr.get_color_for(self.palette_id, self.distance, offset=offset)
         frame: List[int] = [0] * self._length
         frame[self._r_off] = R; frame[self._g_off] = G; frame[self._b_off] = B
         for off, val in self._steady.items():

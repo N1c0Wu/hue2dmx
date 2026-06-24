@@ -15,7 +15,7 @@ class DmxFixture:
         self.dmx_address = dmx_address
         self.hue_light_id = hue_light_id
 
-    def get_dmx_message(self) -> bytes:
+    def get_dmx_message(self, offset: float = 0.0) -> bytes:
         print("not implemented!")
         return bytes()
 

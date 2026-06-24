@@ -12,5 +12,5 @@ class YamlSteadyFixture(DmxFixture):
             frame[int(abs_ch) - start] = int(val)
         self._payload = bytes(frame)
 
-    def get_dmx_message(self) -> bytes:
+    def get_dmx_message(self, offset: float = 0.0) -> bytes:
         return self._payload

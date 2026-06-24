@@ -40,3 +40,65 @@ def test_split_complementary():
 def test_to_complement():
     lst,_ = build_two_lamp_palette((255,0,0),(0,0,0),mode="to_complement",max_distance=2,interpolation="discrete")
     assert len(set(lst)) == 2
+
+def test_palette_manager_offset():
+    from PaletteManager import PaletteManager, PaletteConfig
+    from HueModel import HueLight, On, Color, Point, Gamut, GamutPoint, Dimming, Metadata, Owner
+    
+    pm = PaletteManager()
+    cfg = PaletteConfig(
+        pid="test_p",
+        lamp_a="lamp1",
+        lamp_b="lamp2",
+        mode="blend",
+        max_distance=5,
+        analogous_shift_deg=0.0
+    )
+    pm.register_palette(cfg)
+    
+    l1 = HueLight(
+        type="light",
+        id="lamp1",
+        owner=Owner(rid="o1", rtype="device"),
+        on=On(on=True),
+        color=Color(
+            xy=Point(x=0.675, y=0.322),
+            gamut=Gamut(
+                red=GamutPoint(x=0.675, y=0.322),
+                green=GamutPoint(x=0.409, y=0.518),
+                blue=GamutPoint(x=0.167, y=0.04)
+            )
+        ),
+        dimming=Dimming(brightness=100.0),
+        metadata=Metadata(function="mixed")
+    )
+    l2 = HueLight(
+        type="light",
+        id="lamp2",
+        owner=Owner(rid="o2", rtype="device"),
+        on=On(on=True),
+        color=Color(
+            xy=Point(x=0.167, y=0.04),
+            gamut=Gamut(
+                red=GamutPoint(x=0.675, y=0.322),
+                green=GamutPoint(x=0.409, y=0.518),
+                blue=GamutPoint(x=0.167, y=0.04)
+            )
+        ),
+        dimming=Dimming(brightness=100.0),
+        metadata=Metadata(function="mixed")
+    )
+    
+    pm.update_from_hue_event(l1)
+    pm.update_from_hue_event(l2)
+    
+    c0 = pm.get_color_for("test_p", 0, offset=0)
+    c1 = pm.get_color_for("test_p", 0, offset=1)
+    c5 = pm.get_color_for("test_p", 0, offset=5)
+    c8 = pm.get_color_for("test_p", 0, offset=8)
+    
+    assert c0 != c1
+    assert c0 == c8
+    c3 = pm.get_color_for("test_p", 0, offset=3)
+    assert c5 == c3
+

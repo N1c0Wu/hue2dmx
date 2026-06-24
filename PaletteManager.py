@@ -8,7 +8,7 @@ import logging
 Rgb = Tuple[int, int, int]
 
 class PaletteConfig:
-    def __init__(self, pid: str, lamp_a: str, lamp_b: str, mode: str, max_distance: int, analogous_shift_deg: float, interpolation: str = "smooth"):
+    def __init__(self, pid: str, lamp_a: str, lamp_b: str, mode: str, max_distance: int, analogous_shift_deg: float, interpolation: str = "smooth", speed: float = 0.0):
         self.id = pid
         self.lamp_a = lamp_a
         self.lamp_b = lamp_b
@@ -16,6 +16,7 @@ class PaletteConfig:
         self.max_distance = max_distance
         self.analogous_shift_deg = analogous_shift_deg
         self.interpolation = interpolation
+        self.speed = speed
 
 class PaletteManager:
     """
@@ -86,12 +87,33 @@ class PaletteManager:
             self._palette_hex_map[pid] = hex_map
         return list(impacted)
 
-    def get_color_for(self, palette_id: str, distance: int) -> Rgb:
+    def get_color_for(self, palette_id: str, distance: int, offset: float = 0.0) -> Rgb:
         cfg = self._palettes[palette_id]
         lst = self._palette_rgb_list.get(palette_id)
         if not lst:
             return (0, 0, 0)  # vor dem ersten Event: Schwarz
-        i = max(0, min(cfg.max_distance - 1, int(distance)))
+            
+        total_steps = cfg.max_distance
+        raw_idx = distance + offset
+        
+        # Algorithmic modes are cyclic (hue wraps around 0-360 degrees).
+        # Linear modes like blend shift from A -> B. Ping-pong them to avoid hard color jumps.
+        is_cyclic = cfg.mode in ("triadic", "tetradic", "split_complementary", "to_complement")
+        
+        if is_cyclic:
+            i = int(round(raw_idx)) % total_steps
+        else:
+            period = 2 * total_steps - 2
+            if period <= 0:
+                i = 0
+            else:
+                idx = int(round(raw_idx)) % period
+                if idx >= total_steps:
+                    i = period - idx
+                else:
+                    i = idx
+                    
+        i = max(0, min(total_steps - 1, i))
         return lst[i]
 
     def fixtures_for(self, palette_id: str):

@@ -75,6 +75,7 @@ class DmxController:
             logger=self.logger
         )
         self._validate_fixtures()
+        self._start_animation_loop()
 
     def _load_from_yaml(self):
         yaml_path = os.getenv("FIXTURES_YAML")
@@ -105,7 +106,8 @@ class DmxController:
                 mode=str(p.get("mode", "blend")).lower(),
                 max_distance=int(p.get("max_distance", 100)),
                 analogous_shift_deg=float(p.get("analogous_shift_deg", 20.0)),
-                interpolation=str(p.get("interpolation", "smooth")).lower()
+                interpolation=str(p.get("interpolation", "smooth")).lower(),
+                speed=float(p.get("speed", 0.0))
             ))
 
         fixtures = []
@@ -246,12 +248,40 @@ class DmxController:
 
             time.sleep(60)  # Retry connection every minute if disconnected
 
-    def _send_dmx(self, address: int, payload: bytes, name: str = ""):
+    def _send_dmx(self, address: int, payload: bytes, name: str = "", log_update: bool = True):
         if self.test_mode:
-            channels_str = ", ".join(f"[{address + i}]: {val}" for i, val in enumerate(payload))
-            self.logger.info(f"Update {name} -> {channels_str}")
+            if log_update:
+                channels_str = ", ".join(f"[{address + i}]: {val}" for i, val in enumerate(payload))
+                self.logger.info(f"Update {name} -> {channels_str}")
         else:
             self.dmx_sender.send_message(address, payload)
+
+    def _start_animation_loop(self):
+        has_animation = False
+        if hasattr(self, "palette_mgr") and self.palette_mgr:
+            for cfg in self.palette_mgr._palettes.values():
+                if getattr(cfg, "speed", 0.0) > 0.0:
+                    has_animation = True
+                    break
+        
+        if has_animation:
+            self.logger.info("Starting DMX palette animation loop...")
+            threading.Thread(target=self._run_animation, daemon=True).start()
+
+    def _run_animation(self):
+        while True:
+            try:
+                now = time.time()
+                for fx in self.dmx_fixtures:
+                    if type(fx).__name__ == "YamlRgbFixture":
+                        cfg = self.palette_mgr._palettes.get(fx.palette_id)
+                        if cfg and getattr(cfg, "speed", 0.0) > 0.0:
+                            offset = now * cfg.speed
+                            payload = fx.get_dmx_message(offset=offset)
+                            self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False)
+            except Exception as e:
+                self.logger.error("Error in animation loop: %s", e)
+            time.sleep(0.04)  # ~25 FPS
 
     def _handle_hue_light_event(self, light):
         if hasattr(self, "palette_mgr") and getattr(self, "palette_mgr", None):
