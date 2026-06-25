@@ -73,9 +73,16 @@ class DmxController:
         self.logger.info("Loading DMX fixtures")
         self.dmx_fixtures = self._load_dmx_fixtures()
 
+        max_channel = 0
+        for fx in self.dmx_fixtures:
+            limit = fx.dmx_address + getattr(fx, "_length", 1) - 1
+            if limit > max_channel:
+                max_channel = limit
+        self.logger.info(f"Max configured DMX channel is {max_channel}")
+
         self.logger.info("Initializing DMX sender")
         self.test_mode = os.getenv('STUB_DMX', 'false').lower() == 'true'
-        self.dmx_sender = DmxSender(logger=self.logger, stub_mode=self.test_mode)
+        self.dmx_sender = DmxSender(logger=self.logger, stub_mode=self.test_mode, max_channel=max_channel)
 
         self.logger.info("Connecting to Hue bridge")
         self.hue_bridge = HueBridge(

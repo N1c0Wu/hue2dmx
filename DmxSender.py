@@ -12,7 +12,7 @@ from typing import Optional
 import threading
 
 class DmxSender:
-    def __init__(self, logger: Logger, stub_mode: bool = False):
+    def __init__(self, logger: Logger, stub_mode: bool = False, max_channel: int = 0):
         self.logger = logger
         self.stub_mode = stub_mode
         self.ftdi_serial: str = None
@@ -20,6 +20,7 @@ class DmxSender:
         self.target_dmx_data = bytearray(513)
         self.channel_transition_time_remaining = [0.0] * 513
         self.transition_rate = 600.0  # units per second (covers 0-255 in ~425ms)
+        self.universe_size = max(128, max_channel + 1)
         self._running = False
         self._thread = None
         
@@ -101,7 +102,7 @@ class DmxSender:
                                     else:
                                         self.dmx_data[i] = int(cur - rate)
                                     
-                    self.send_dmx_packet(ftdi_port, self.dmx_data)
+                    self.send_dmx_packet(ftdi_port, self.dmx_data[:self.universe_size])
                     time.sleep(0.025)  # roughly 40Hz
         except Exception as e:
             self.logger.error("DMX transmit loop crashed: %s", e)
@@ -124,22 +125,25 @@ class DmxSender:
 
     @staticmethod
     def send_dmx_packet(ftdi_port: Device, data: bytes):
-        # Enable bit-bang mode (Bit 0 / TXD as output)
-        ftdi_port.ftdi_fn.ftdi_set_bitmode(1, 0x01)
-        
-        # Pull TXD line low (Break)
-        ftdi_port.write(b'\x00')
-        time.sleep(0.00012)  # 120 microseconds (DMX spec requires >= 88us)
-        
-        # Pull TXD line high (Mark After Break)
-        ftdi_port.write(b'\x01')
-        time.sleep(0.00002)  # 20 microseconds (DMX spec requires >= 8us)
-        
-        # Disable bit-bang mode, returning to standard UART mode
-        ftdi_port.ftdi_fn.ftdi_set_bitmode(0, 0x00)
-        time.sleep(0.00001)  # brief stabilizer sleep
-        
+        # 1. Clear any pending data in buffers before switching baudrate
         ftdi_port.flush()
+        
+        # 2. Switch baudrate to 9600 to prepare the Break pulse
+        ftdi_port.baudrate = 9600
         ftdi_port.ftdi_fn.ftdi_set_line_property(8, 2, 0)
+        
+        # 3. Write a single 0x00 byte. At 9600 baud, 8N2:
+        # Start bit (LOW) + 8 data bits of 0 (LOW) = 9 bits of logic LOW (~937.5 us Break).
+        # Followed by 2 stop bits (HIGH) = 208.3 us logic HIGH (Mark After Break).
+        ftdi_port.write(b'\x00')
+        ftdi_port.flush()
+        
+        # 4. Sleep to let the FTDI chip fully shift out the 11 bits at 9600 baud.
+        # 11 bits * (1/9600) = 1.146 milliseconds.
+        # A sleep of 1.3 ms is perfect to cover the full character.
+        time.sleep(0.0013)
+        
+        # 5. Switch baudrate to 250000 and send DMX data payload.
         ftdi_port.baudrate = 250000
+        ftdi_port.ftdi_fn.ftdi_set_line_property(8, 2, 0)
         ftdi_port.write(bytes(data))
