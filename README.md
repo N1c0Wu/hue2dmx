@@ -85,7 +85,34 @@ python3 hue-dmx.py
 
 ## Running as a Background Service (Linux/Raspberry Pi)
 
-To run the script automatically in the background whenever your system boots, you can set up a `systemd` service.
+You can run the script automatically in the background either by using the provided control script or by configuring a systemd service.
+
+### Method 1: Using the Control Script (No root permissions required)
+
+The `hue-dmx.sh` script runs the process in the background, automatically detects the virtual environment (`venv`), manages the process PID, and handles standard log redirection.
+
+1. **Start the background service**:
+   ```bash
+   ./hue-dmx.sh start
+   ```
+2. **Check the status**:
+   ```bash
+   ./hue-dmx.sh status
+   ```
+3. **Restart the background service**:
+   ```bash
+   ./hue-dmx.sh restart
+   ```
+4. **Stop the background service**:
+   ```bash
+   ./hue-dmx.sh stop
+   ```
+
+Stdout and stderr outputs will be redirected to `hue-dmx-console.log` in the script directory.
+
+### Method 2: Setup systemd (Runs automatically on system boot)
+
+To set up a `systemd` service:
 
 1. **Create a service file**:
    ```bash
@@ -106,6 +133,7 @@ To run the script automatically in the background whenever your system boots, yo
    # Set the environment variables
    Environment="FIXTURES_YAML=/home/pi/hue2dmx/fixtures.yml"
    Environment="RUNNING_AS_SERVICE=true"
+   Environment="PYTHONUNBUFFERED=1"
    # Use the Python executable from inside your virtual environment
    ExecStart=/home/pi/hue2dmx/venv/bin/python3 hue-dmx.py
 

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sys
 import threading
 import time
 import collections
@@ -24,6 +25,8 @@ class DmxController:
     def __init__(self):
         self.running_as_service = os.getenv('RUNNING_AS_SERVICE', 'false').lower() == 'true'
         self._load_env()
+        # Re-evaluate RUNNING_AS_SERVICE in case it was loaded from the env file
+        self.running_as_service = os.getenv('RUNNING_AS_SERVICE', 'false').lower() == 'true'
         self.logger = self._init_logger()
         self.dmx_fixtures: List[DmxFixture] = []
         self.dmx_sender: Optional[DmxSender] = None
@@ -48,14 +51,21 @@ class DmxController:
         logger.setLevel(logging.INFO)
         log_file = os.getenv('LOG_FILE', 'dmx_controller.log')
 
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.INFO)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        # Prevent duplicate handlers if _init_logger is called multiple times
+        if not logger.handlers:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            logger.addHandler(console_handler)
 
-        logger.addHandler(console_handler)
-        logger.addHandler(file_handler)
+            try:
+                file_handler = logging.FileHandler(log_file)
+                file_handler.setLevel(logging.INFO)
+                file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+                logger.addHandler(file_handler)
+            except Exception as e:
+                # Fall back to console only if file is not writeable (e.g. permission issues in background service)
+                print(f"Warning: Could not initialize file log handler ({log_file}): {e}", file=sys.stderr)
+
         return logger
 
     def _initialize(self):
@@ -79,7 +89,15 @@ class DmxController:
 
     def _load_from_yaml(self):
         yaml_path = os.getenv("FIXTURES_YAML")
+        if not yaml_path:
+            # Fallback to fixtures.yml in the script directory, then current working directory
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            yaml_path = os.path.join(script_dir, "fixtures.yml")
+            if not os.path.exists(yaml_path):
+                yaml_path = os.path.join(os.getcwd(), "fixtures.yml")
+
         if not (yaml_path and os.path.exists(yaml_path)):
+            self.logger.warning(f"Fixtures YAML file not found at: {yaml_path}")
             return None
         with open(yaml_path, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
@@ -136,7 +154,7 @@ class DmxController:
         yaml_fixtures = self._load_from_yaml()
         if yaml_fixtures is not None:
             return yaml_fixtures
-        self.logger.error("No fixtures YAML loaded. Make sure FIXTURES_YAML is set.")
+        self.logger.error("No fixtures YAML loaded. Make sure fixtures.yml exists in the script directory or FIXTURES_YAML is set to a valid path.")
         exit(1)
 
     def send_heartbeat(self):
