@@ -319,25 +319,31 @@ class DmxController:
                             # Default speed from config
                             speed = getattr(cfg, "speed", 0.0)
                             
-                            # Check if the primary lamp of this palette is in "prism" or "dynamic_palette" mode
+                            # Check if the primary lamp of this palette is in any active effect or dynamic palette mode
                             is_animating = False
+                            lamp_speed = 0.0
                             for lamp_id in [cfg.lamp_a, cfg.lamp_b]:
                                 if lamp_id:
                                     lamp_light = self._cached_lights.get(lamp_id)
                                     if lamp_light:
-                                        if lamp_light.effects and lamp_light.effects.status == "prism":
+                                        eff = getattr(lamp_light.effects, "status", "no_effect") if lamp_light.effects else "no_effect"
+                                        dyn = getattr(lamp_light.dynamics, "status", "none") if lamp_light.dynamics else "none"
+                                        if eff != "no_effect" or dyn == "dynamic_palette":
                                             is_animating = True
-                                            break
-                                        if lamp_light.dynamics and lamp_light.dynamics.status == "dynamic_palette":
-                                            is_animating = True
+                                            if lamp_light.dynamics and getattr(lamp_light.dynamics, "speed", 0.0) > 0.0:
+                                                lamp_speed = lamp_light.dynamics.speed
                                             break
                                         
                             if is_animating:
                                 # Run a default animation speed (e.g. 0.5) if speed is 0
-                                speed = speed if speed > 0.0 else 0.5
+                                speed = lamp_speed if lamp_speed > 0.0 else (speed if speed > 0.0 else 0.5)
                                 
                             if speed > 0.0:
-                                offset = now * speed
+                                # Scale speed by max_distance so cycle duration is consistent
+                                # A speed of 1.0 means a full cycle (max_distance steps) takes ~10 seconds.
+                                total_steps = getattr(cfg, "max_distance", 100)
+                                step_speed = speed * (total_steps / 10.0)
+                                offset = now * step_speed
                                 payload = fx.get_dmx_message(offset=offset)
                                 self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False)
             except Exception as e:
