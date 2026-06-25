@@ -124,13 +124,20 @@ class DmxSender:
 
     @staticmethod
     def send_dmx_packet(ftdi_port: Device, data: bytes):
-        # Send hardware DMX break (TX line low)
-        ftdi_port.ftdi_fn.ftdi_set_break(1)
-        time.sleep(0.0001)  # 100 microseconds (DMX spec requires >= 88us)
+        # Enable bit-bang mode (Bit 0 / TXD as output)
+        ftdi_port.ftdi_fn.ftdi_set_bitmode(1, 0x01)
         
-        # Clear break (TX line high - Mark After Break)
-        ftdi_port.ftdi_fn.ftdi_set_break(0)
-        time.sleep(0.000012)  # 12 microseconds (DMX spec requires >= 8us)
+        # Pull TXD line low (Break)
+        ftdi_port.write(b'\x00')
+        time.sleep(0.00012)  # 120 microseconds (DMX spec requires >= 88us)
+        
+        # Pull TXD line high (Mark After Break)
+        ftdi_port.write(b'\x01')
+        time.sleep(0.00002)  # 20 microseconds (DMX spec requires >= 8us)
+        
+        # Disable bit-bang mode, returning to standard UART mode
+        ftdi_port.ftdi_fn.ftdi_set_bitmode(0, 0x00)
+        time.sleep(0.00001)  # brief stabilizer sleep
         
         ftdi_port.flush()
         ftdi_port.ftdi_fn.ftdi_set_line_property(8, 2, 0)

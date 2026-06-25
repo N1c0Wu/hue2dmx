@@ -84,7 +84,7 @@ nosetests.xml
 coverage.xml
 *.cover
 *.py,cover
-*.Pyc
+*.pyc
 .hypothesis/
 .pytest_cache/
 cover/
@@ -152,6 +152,7 @@ ipython_config.py
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/
+__pycache__/
 
 # Celery stuff
 celerybeat-schedule
