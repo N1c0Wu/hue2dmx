@@ -68,6 +68,7 @@ class Dynamics(BaseModel):
     status_values: List[str]
     speed: float
     speed_valid: bool
+    duration: Optional[float] = None
 
 
 class Alert(BaseModel):

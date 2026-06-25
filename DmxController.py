@@ -15,7 +15,7 @@ from HueBridge import HueBridge
 from PaletteManager import PaletteManager, PaletteConfig
 from YamlRgbFixture import YamlRgbFixture
 from YamlSteadyFixture import YamlSteadyFixture
-from HueModel import Point, Color, Dimming, On, Effects
+from HueModel import Point, Color, Dimming, On, Effects, Dynamics
 
 
 class DmxController:
@@ -264,6 +264,22 @@ class DmxController:
                             elif not light.effects:
                                 light.effects = Effects(status=item["effects"].get("status", "no_effect"), status_values=[], effect_values=[])
                                 updated = True
+                        if "dynamics" in item:
+                            if light.dynamics:
+                                light.dynamics.status = item["dynamics"].get("status", light.dynamics.status)
+                                light.dynamics.speed = item["dynamics"].get("speed", light.dynamics.speed)
+                                if "duration" in item["dynamics"]:
+                                    light.dynamics.duration = item["dynamics"]["duration"]
+                                updated = True
+                            elif not light.dynamics:
+                                light.dynamics = Dynamics(
+                                    status=item["dynamics"].get("status", "none"),
+                                    status_values=[],
+                                    speed=item["dynamics"].get("speed", 0.0),
+                                    speed_valid=False,
+                                    duration=item["dynamics"].get("duration")
+                                )
+                                updated = True
                         
                         if updated:
                             try:
@@ -273,13 +289,13 @@ class DmxController:
 
             time.sleep(60)  # Retry connection every minute if disconnected
 
-    def _send_dmx(self, address: int, payload: bytes, name: str = "", log_update: bool = True):
+    def _send_dmx(self, address: int, payload: bytes, name: str = "", log_update: bool = True, duration: Optional[float] = None):
         if self.test_mode:
             if log_update:
                 channels_str = ", ".join(f"[{address + i}]: {val}" for i, val in enumerate(payload))
-                self.logger.info(f"Update {name} -> {channels_str}")
+                self.logger.info(f"Update {name} -> {channels_str} (duration: {duration}s)")
         else:
-            self.dmx_sender.send_message(address, payload)
+            self.dmx_sender.send_message(address, payload, duration=duration)
 
     def _start_animation_loop(self):
         self.logger.info("Starting DMX palette animation loop...")
@@ -296,17 +312,21 @@ class DmxController:
                             # Default speed from config
                             speed = getattr(cfg, "speed", 0.0)
                             
-                            # Check if the primary lamp of this palette is in "prism" effect
-                            is_prism = False
+                            # Check if the primary lamp of this palette is in "prism" or "dynamic_palette" mode
+                            is_animating = False
                             for lamp_id in [cfg.lamp_a, cfg.lamp_b]:
                                 if lamp_id:
                                     lamp_light = self._cached_lights.get(lamp_id)
-                                    if lamp_light and lamp_light.effects and lamp_light.effects.status == "prism":
-                                        is_prism = True
-                                        break
+                                    if lamp_light:
+                                        if lamp_light.effects and lamp_light.effects.status == "prism":
+                                            is_animating = True
+                                            break
+                                        if lamp_light.dynamics and lamp_light.dynamics.status == "dynamic_palette":
+                                            is_animating = True
+                                            break
                                         
-                            if is_prism:
-                                # Run a default prism cycling speed (e.g. 0.5) if speed is 0
+                            if is_animating:
+                                # Run a default animation speed (e.g. 0.5) if speed is 0
                                 speed = speed if speed > 0.0 else 0.5
                                 
                             if speed > 0.0:
@@ -318,12 +338,18 @@ class DmxController:
             time.sleep(0.04)  # ~25 FPS
 
     def _handle_hue_light_event(self, light):
+        duration = None
+        if light.dynamics and getattr(light.dynamics, "duration", None) is not None:
+            duration = light.dynamics.duration / 1000.0
+            # Reset duration on the model so it only applies once
+            light.dynamics.duration = None
+
         if hasattr(self, "palette_mgr") and getattr(self, "palette_mgr", None):
             impacted = self.palette_mgr.update_from_hue_event(light)
             for pid in impacted:
                 for fx in self.palette_mgr.fixtures_for(pid):
                     payload = fx.get_dmx_message()
-                    self._send_dmx(fx.dmx_address, payload, fx.name)
+                    self._send_dmx(fx.dmx_address, payload, fx.name, duration=duration)
 
     @staticmethod
     def _contains_button_short_release(event: dict) -> bool:
