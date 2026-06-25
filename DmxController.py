@@ -15,7 +15,7 @@ from HueBridge import HueBridge
 from PaletteManager import PaletteManager, PaletteConfig
 from YamlRgbFixture import YamlRgbFixture
 from YamlSteadyFixture import YamlSteadyFixture
-from HueModel import Point, Color, Dimming, On, Effects, Dynamics
+from HueModel import Point, Color, Dimming, On, Effects, Dynamics, ColorTemperature
 
 
 class DmxController:
@@ -204,7 +204,12 @@ class DmxController:
             
             # Cache the initial full state so we don't need to do HTTP GETs later
             self.logger.info(f"Caching initial state for Hue light: {hue_id}")
-            self._cached_lights[hue_id] = self.hue_bridge.get_light(hue_id)
+            light = self.hue_bridge.get_light(hue_id)
+            if light.color_temperature and getattr(light.color_temperature, "mirek", None) is not None:
+                light._color_mode = "color_temperature"
+            else:
+                light._color_mode = "color"
+            self._cached_lights[hue_id] = light
 
 
 
@@ -243,12 +248,21 @@ class DmxController:
                         # Apply deltas from the SSE event directly to our cached light model
                         updated = False
                         if "color" in item and "xy" in item["color"]:
+                            light._color_mode = "color"
                             if light.color and light.color.xy:
                                 light.color.xy.x = item["color"]["xy"].get("x", light.color.xy.x)
                                 light.color.xy.y = item["color"]["xy"].get("y", light.color.xy.y)
                                 updated = True
                             elif not light.color:
                                 light.color = Color(xy=Point(x=item["color"]["xy"].get("x", 0.0), y=item["color"]["xy"].get("y", 0.0)))
+                                updated = True
+                        if "color_temperature" in item and "mirek" in item["color_temperature"]:
+                            light._color_mode = "color_temperature"
+                            if light.color_temperature:
+                                light.color_temperature.mirek = item["color_temperature"].get("mirek", light.color_temperature.mirek)
+                                updated = True
+                            elif not light.color_temperature:
+                                light.color_temperature = ColorTemperature(mirek=item["color_temperature"].get("mirek"))
                                 updated = True
                         if "dimming" in item and "brightness" in item["dimming"]:
                             if light.dimming:

@@ -1,8 +1,9 @@
 from __future__ import annotations
 from typing import Dict, List, Tuple, Set, Optional
 from collections import defaultdict
-from ColorConverter import Converter, XYPoint
+from ColorConverter import Converter, XYPoint, GamutA, GamutB, GamutC
 from palette import build_two_lamp_palette
+from kelvin_rgb import kelvin_table
 import logging
 
 Rgb = Tuple[int, int, int]
@@ -45,13 +46,36 @@ class PaletteManager:
         try:
             if not light.on.on:
                 return (0, 0, 0)
-            gamut = (
-                XYPoint(light.color.gamut.red.x,   light.color.gamut.red.y),
-                XYPoint(light.color.gamut.green.x, light.color.gamut.green.y),
-                XYPoint(light.color.gamut.blue.x,  light.color.gamut.blue.y),
-            )
-            x, y = light.color.xy.x, light.color.xy.y
-            r, g, b = Converter(gamut).xy_to_rgb(x, y)
+            
+            color_mode = getattr(light, "_color_mode", "color")
+            if color_mode == "color_temperature" and light.color_temperature and light.color_temperature.mirek is not None:
+                mirek = light.color_temperature.mirek
+                kelvin = 1000000.0 / mirek
+                closest_kelvin = min(kelvin_table.keys(), key=lambda k: abs(k - kelvin))
+                r, g, b = kelvin_table[closest_kelvin]
+            else:
+                if not light.color:
+                    # Fallback to white if color object is missing
+                    r, g, b = (255, 255, 255)
+                else:
+                    if light.color.gamut:
+                        gamut = (
+                            XYPoint(light.color.gamut.red.x,   light.color.gamut.red.y),
+                            XYPoint(light.color.gamut.green.x, light.color.gamut.green.y),
+                            XYPoint(light.color.gamut.blue.x,  light.color.gamut.blue.y),
+                        )
+                    else:
+                        gt = getattr(light.color, "gamut_type", "B")
+                        if gt == "A":
+                            gamut = GamutA
+                        elif gt == "C":
+                            gamut = GamutC
+                        else:
+                            gamut = GamutB
+                    
+                    x, y = light.color.xy.x, light.color.xy.y
+                    r, g, b = Converter(gamut).xy_to_rgb(x, y)
+                    
             dim = float(getattr(light.dimming, "brightness", 100.0)) / 100.0
             return (max(0,min(255,int(r*dim))),
                     max(0,min(255,int(g*dim))),
@@ -85,6 +109,7 @@ class PaletteManager:
             )
             self._palette_rgb_list[pid] = lst
             self._palette_hex_map[pid] = hex_map
+            self.log.info("Updated palette %s using Lamp A (RGB: %s) and Lamp B (RGB: %s) [Mode: %s]", pid, a, b, cfg.mode)
         return list(impacted)
 
     def get_color_for(self, palette_id: str, distance: int, offset: float = 0.0) -> Rgb:
