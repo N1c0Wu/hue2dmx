@@ -16,6 +16,8 @@ class DmxSender:
         self.stub_mode = stub_mode
         self.ftdi_serial: str = None
         self.dmx_data = bytearray(513)
+        self.target_dmx_data = bytearray(513)
+        self.transition_rate = 600.0  # units per second (covers 0-255 in ~425ms)
         self._running = False
         self._thread = None
         
@@ -58,7 +60,30 @@ class DmxSender:
     def _transmit_loop(self):
         try:
             with Device(self.ftdi_serial) as ftdi_port:
+                # Initialize current state to match target state to avoid fading in on startup
+                self.dmx_data = bytearray(self.target_dmx_data)
+                
+                last_time = time.time()
                 while self._running:
+                    now = time.time()
+                    dt = now - last_time
+                    last_time = now
+                    
+                    # Interpolate current values towards targets
+                    rate = self.transition_rate * dt
+                    for i in range(len(self.dmx_data)):
+                        cur = self.dmx_data[i]
+                        tar = self.target_dmx_data[i]
+                        if cur != tar:
+                            diff = tar - cur
+                            if abs(diff) <= rate:
+                                self.dmx_data[i] = tar
+                            else:
+                                if diff > 0:
+                                    self.dmx_data[i] = int(cur + rate)
+                                else:
+                                    self.dmx_data[i] = int(cur - rate)
+                                    
                     self.send_dmx_packet(ftdi_port, self.dmx_data)
                     time.sleep(0.025)  # roughly 40Hz
         except Exception as e:
@@ -66,19 +91,24 @@ class DmxSender:
 
     def send_message(self, address: int, data: bytes):
         if self.stub_mode:
+            # Update target and current data to keep console stub updates instant and correct
+            self.target_dmx_data[address:address + len(data)] = data
+            self.dmx_data[address:address + len(data)] = data
             return
         assert self.ftdi_serial, "FTDI driver is not initialized"
-        # Just update the buffer in memory! The transmit loop will pick it up instantly.
-        self.dmx_data[address:address + len(data)] = data
+        # Update target buffer! The transmit loop will smoothly interpolate towards it.
+        self.target_dmx_data[address:address + len(data)] = data
 
     @staticmethod
     def send_dmx_packet(ftdi_port: Device, data: bytes):
-        # reset dmx channel
-        ftdi_port.ftdi_fn.ftdi_set_bitmode(1, 0x01)  # break
-        ftdi_port.write(b'\x00')
-        time.sleep(0.001)
-        ftdi_port.write(b'\x01')
-        ftdi_port.ftdi_fn.ftdi_set_bitmode(0, 0x00)  # release break
+        # Send hardware DMX break (TX line low)
+        ftdi_port.ftdi_fn.ftdi_set_break(1)
+        time.sleep(0.0001)  # 100 microseconds (DMX spec requires >= 88us)
+        
+        # Clear break (TX line high - Mark After Break)
+        ftdi_port.ftdi_fn.ftdi_set_break(0)
+        time.sleep(0.000012)  # 12 microseconds (DMX spec requires >= 8us)
+        
         ftdi_port.flush()
         ftdi_port.ftdi_fn.ftdi_set_line_property(8, 2, 0)
         ftdi_port.baudrate = 250000

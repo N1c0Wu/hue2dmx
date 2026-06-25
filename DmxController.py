@@ -15,7 +15,7 @@ from HueBridge import HueBridge
 from PaletteManager import PaletteManager, PaletteConfig
 from YamlRgbFixture import YamlRgbFixture
 from YamlSteadyFixture import YamlSteadyFixture
-from HueModel import Point, Color, Dimming, On
+from HueModel import Point, Color, Dimming, On, Effects
 
 
 class DmxController:
@@ -257,6 +257,13 @@ class DmxController:
                             elif not light.on:
                                 light.on = On(on=item["on"].get("on", False))
                                 updated = True
+                        if "effects" in item and "status" in item["effects"]:
+                            if light.effects:
+                                light.effects.status = item["effects"].get("status", light.effects.status)
+                                updated = True
+                            elif not light.effects:
+                                light.effects = Effects(status=item["effects"].get("status", "no_effect"), status_values=[], effect_values=[])
+                                updated = True
                         
                         if updated:
                             try:
@@ -275,16 +282,8 @@ class DmxController:
             self.dmx_sender.send_message(address, payload)
 
     def _start_animation_loop(self):
-        has_animation = False
-        if hasattr(self, "palette_mgr") and self.palette_mgr:
-            for cfg in self.palette_mgr._palettes.values():
-                if getattr(cfg, "speed", 0.0) > 0.0:
-                    has_animation = True
-                    break
-        
-        if has_animation:
-            self.logger.info("Starting DMX palette animation loop...")
-            threading.Thread(target=self._run_animation, daemon=True).start()
+        self.logger.info("Starting DMX palette animation loop...")
+        threading.Thread(target=self._run_animation, daemon=True).start()
 
     def _run_animation(self):
         while True:
@@ -293,10 +292,27 @@ class DmxController:
                 for fx in self.dmx_fixtures:
                     if type(fx).__name__ == "YamlRgbFixture":
                         cfg = self.palette_mgr._palettes.get(fx.palette_id)
-                        if cfg and getattr(cfg, "speed", 0.0) > 0.0:
-                            offset = now * cfg.speed
-                            payload = fx.get_dmx_message(offset=offset)
-                            self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False)
+                        if cfg:
+                            # Default speed from config
+                            speed = getattr(cfg, "speed", 0.0)
+                            
+                            # Check if the primary lamp of this palette is in "prism" effect
+                            is_prism = False
+                            for lamp_id in [cfg.lamp_a, cfg.lamp_b]:
+                                if lamp_id:
+                                    lamp_light = self._cached_lights.get(lamp_id)
+                                    if lamp_light and lamp_light.effects and lamp_light.effects.status == "prism":
+                                        is_prism = True
+                                        break
+                                        
+                            if is_prism:
+                                # Run a default prism cycling speed (e.g. 0.5) if speed is 0
+                                speed = speed if speed > 0.0 else 0.5
+                                
+                            if speed > 0.0:
+                                offset = now * speed
+                                payload = fx.get_dmx_message(offset=offset)
+                                self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False)
             except Exception as e:
                 self.logger.error("Error in animation loop: %s", e)
             time.sleep(0.04)  # ~25 FPS
