@@ -36,6 +36,9 @@ class DmxController:
         self.update_lock = threading.Lock()
         self.semaphore = threading.Semaphore(self.MAX_CONCURRENT_UPDATES)  # Limit concurrency
 
+        self._active_transitions = {}
+        self._transitions_lock = threading.Lock()
+
         self._initialize()
 
     def _load_env(self):
@@ -372,11 +375,98 @@ class DmxController:
             light.dynamics.duration = None
 
         if hasattr(self, "palette_mgr") and getattr(self, "palette_mgr", None):
-            impacted = self.palette_mgr.update_from_hue_event(light)
-            for pid in impacted:
-                for fx in self.palette_mgr.fixtures_for(pid):
-                    payload = fx.get_dmx_message()
-                    self._send_dmx(fx.dmx_address, payload, fx.name, duration=duration)
+            lid = light.id
+            impacted = list(self.palette_mgr._lamp_to_palette_ids.get(lid, set()))
+            
+            if duration and duration > 0.0:
+                for pid in impacted:
+                    cfg = self.palette_mgr._palettes.get(pid)
+                    if not cfg:
+                        continue
+                    old_a = self.palette_mgr._lamp_rgb.get(cfg.lamp_a)
+                    old_b = self.palette_mgr._lamp_rgb.get(cfg.lamp_b)
+                    
+                    target_color = self.palette_mgr._xy_to_rgb(light)
+                    if target_color is None:
+                        continue
+                        
+                    target_a = target_color if cfg.lamp_a == lid else old_a
+                    target_b = target_color if cfg.lamp_b == lid else old_b
+                    
+                    if old_a is None or old_b is None or target_a is None or target_b is None:
+                        self.palette_mgr.update_from_hue_event(light)
+                        for fx in self.palette_mgr.fixtures_for(pid):
+                            payload = fx.get_dmx_message()
+                            self._send_dmx(fx.dmx_address, payload, fx.name)
+                        continue
+                        
+                    with self._transitions_lock:
+                        old_cancel = self._active_transitions.get(pid)
+                        if old_cancel:
+                            old_cancel.set()
+                        cancel_event = threading.Event()
+                        self._active_transitions[pid] = cancel_event
+                        
+                    threading.Thread(
+                        target=self._run_palette_transition,
+                        args=(pid, old_a, old_b, target_a, target_b, duration, cancel_event),
+                        daemon=True
+                    ).start()
+            else:
+                impacted_pids = self.palette_mgr.update_from_hue_event(light)
+                for pid in impacted_pids:
+                    with self._transitions_lock:
+                        old_cancel = self._active_transitions.get(pid)
+                        if old_cancel:
+                            old_cancel.set()
+                            self._active_transitions.pop(pid, None)
+                    for fx in self.palette_mgr.fixtures_for(pid):
+                        payload = fx.get_dmx_message()
+                        self._send_dmx(fx.dmx_address, payload, fx.name)
+
+    def _run_palette_transition(self, pid, old_a, old_b, target_a, target_b, duration, cancel_event):
+        self.logger.info(f"Starting wave transition for palette {pid} over {duration}s")
+        start_time = time.time()
+        cfg = self.palette_mgr._palettes[pid]
+        max_distance = getattr(cfg, "max_distance", 100)
+        
+        while not cancel_event.is_set():
+            now = time.time()
+            elapsed = now - start_time
+            t = elapsed / duration
+            if t >= 1.0:
+                t = 1.0
+                
+            current_a = self.palette_mgr.interpolate_rgb(old_a, target_a, t)
+            current_b = self.palette_mgr.interpolate_rgb(old_b, target_b, t)
+            
+            self.palette_mgr.update_palette_intermediate(pid, current_a, current_b)
+            
+            is_cyclic = cfg.mode in ("triadic", "tetradic", "split_complementary", "to_complement")
+            period = max_distance if is_cyclic else (2 * max_distance - 2)
+            if period <= 0:
+                period = 1
+            offset = t * period
+            
+            for fx in self.palette_mgr.fixtures_for(pid):
+                payload = fx.get_dmx_message(offset=offset)
+                self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False, duration=None)
+                
+            if t >= 1.0:
+                break
+                
+            time.sleep(0.04) # ~25 FPS
+            
+        if not cancel_event.is_set():
+            self.palette_mgr.update_palette_intermediate(pid, target_a, target_b)
+            for fx in self.palette_mgr.fixtures_for(pid):
+                payload = fx.get_dmx_message(offset=0.0)
+                self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False, duration=None)
+            self.logger.info(f"Wave transition for palette {pid} completed successfully.")
+            
+            with self._transitions_lock:
+                if self._active_transitions.get(pid) == cancel_event:
+                    self._active_transitions.pop(pid, None)
 
     @staticmethod
     def _contains_button_short_release(event: dict) -> bool:

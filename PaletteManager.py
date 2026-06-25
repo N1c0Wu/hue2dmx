@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Dict, List, Tuple, Set, Optional
 from collections import defaultdict
 from ColorConverter import Converter, XYPoint, GamutA, GamutB, GamutC
-from palette import build_two_lamp_palette
+from palette import build_two_lamp_palette, _rgb_to_hsv, _hsv_to_rgb, _lerp_hue_shortest, _lerp
 from kelvin_rgb import kelvin_table
 import logging
 
@@ -146,3 +146,23 @@ class PaletteManager:
 
     def hex_map_for(self, palette_id: str) -> Dict[int, str]:
         return self._palette_hex_map.get(palette_id, {})
+
+    def interpolate_rgb(self, rgb_start: Rgb, rgb_end: Rgb, t: float) -> Rgb:
+        h1, s1, v1 = _rgb_to_hsv(rgb_start)
+        h2, s2, v2 = _rgb_to_hsv(rgb_end)
+        
+        h = _lerp_hue_shortest(h1, h2, t)
+        s = _lerp(s1, s2, t)
+        v = _lerp(v1, v2, t)
+        
+        return _hsv_to_rgb(h, s, v)
+
+    def update_palette_intermediate(self, pid: str, rgb_a: Rgb, rgb_b: Rgb):
+        cfg = self._palettes[pid]
+        self._lamp_rgb[cfg.lamp_a] = rgb_a
+        self._lamp_rgb[cfg.lamp_b] = rgb_b
+        lst, hex_map = build_two_lamp_palette(
+            rgb_a, rgb_b, mode=cfg.mode, max_distance=cfg.max_distance, analogous_shift_deg=cfg.analogous_shift_deg, interpolation=cfg.interpolation
+        )
+        self._palette_rgb_list[pid] = lst
+        self._palette_hex_map[pid] = hex_map
