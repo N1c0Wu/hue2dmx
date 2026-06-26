@@ -24,8 +24,8 @@ start() {
     export PYTHONUNBUFFERED=1
     export RUNNING_AS_SERVICE=true
     
-    # Run in background via nohup and redirect logs
-    nohup "$PYTHON_EXE" "$SCRIPT_DIR/hue-dmx.py" >> "$SCRIPT_DIR/hue-dmx-console.log" 2>&1 &
+    # Run in background via nohup and redirect logs (overwrite to prevent file growth)
+    nohup "$PYTHON_EXE" "$SCRIPT_DIR/hue-dmx.py" > "$SCRIPT_DIR/hue-dmx-console.log" 2>&1 &
     
     PID=$!
     echo $PID > "$PID_FILE"

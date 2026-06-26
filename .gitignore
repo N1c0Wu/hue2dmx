@@ -212,3 +212,9 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,python
+fixtures.yml
+test_ping.py
+__pycache__/DmxController.cpython-314.pyc
+scratch/check_bridge_colors.py
+tests/__pycache__/test_palette.cpython-314.pyc
+fixtures.yml

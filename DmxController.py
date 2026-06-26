@@ -1,5 +1,6 @@
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 import threading
@@ -61,7 +62,7 @@ class DmxController:
             logger.addHandler(console_handler)
 
             try:
-                file_handler = logging.FileHandler(log_file)
+                file_handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
                 file_handler.setLevel(logging.INFO)
                 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
                 logger.addHandler(file_handler)
