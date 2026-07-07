@@ -16,6 +16,8 @@ from HueBridge import HueBridge
 from PaletteManager import PaletteManager, PaletteConfig
 from YamlRgbFixture import YamlRgbFixture
 from YamlSteadyFixture import YamlSteadyFixture
+from YamlPixelStripFixture import YamlPixelStripFixture
+from ArtNetSender import ArtNetSender
 from HueModel import Point, Color, Dimming, On, Effects, Dynamics, ColorTemperature
 
 
@@ -31,6 +33,7 @@ class DmxController:
         self.logger = self._init_logger()
         self.dmx_fixtures: List[DmxFixture] = []
         self.dmx_sender: Optional[DmxSender] = None
+        self.artnet_sender: Optional[ArtNetSender] = None
         self.hue_bridge: Optional[HueBridge] = None
 
         self.update_queue = collections.deque()  # FIFO queue for updates
@@ -79,14 +82,32 @@ class DmxController:
 
         max_channel = 0
         for fx in self.dmx_fixtures:
-            limit = fx.dmx_address + getattr(fx, "_length", 1) - 1
-            if limit > max_channel:
-                max_channel = limit
+            if type(fx).__name__ != "YamlPixelStripFixture":
+                limit = fx.dmx_address + getattr(fx, "_length", 1) - 1
+                if limit > max_channel:
+                    max_channel = limit
         self.logger.info(f"Max configured DMX channel is {max_channel}")
 
         self.logger.info("Initializing DMX sender")
         self.test_mode = os.getenv('STUB_DMX', 'false').lower() == 'true'
         self.dmx_sender = DmxSender(logger=self.logger, stub_mode=self.test_mode, max_channel=max_channel)
+
+        self.artnet_sender = None
+        if getattr(self, "artnet_enabled", False):
+            self.logger.info("Initializing Art-Net sender")
+            artnet_max_channel = 0
+            for fx in self.dmx_fixtures:
+                if type(fx).__name__ == "YamlPixelStripFixture":
+                    limit = fx.dmx_address + getattr(fx, "_length", 1) - 1
+                    if limit > artnet_max_channel:
+                        artnet_max_channel = limit
+            self.artnet_sender = ArtNetSender(
+                logger=self.logger,
+                ip=self.artnet_ip,
+                port=self.artnet_port,
+                start_universe=self.artnet_start_universe,
+                max_channel=artnet_max_channel
+            )
 
         self.logger.info("Connecting to Hue bridge")
         self.hue_bridge = HueBridge(
@@ -124,6 +145,12 @@ class DmxController:
         dmx_cfg = cfg.get("dmx") or {}
         if "stub" in dmx_cfg:
             os.environ["STUB_DMX"] = "true" if dmx_cfg["stub"] else "false"
+        
+        artnet_cfg = cfg.get("artnet") or {}
+        self.artnet_enabled = artnet_cfg.get("enabled", False)
+        self.artnet_ip = str(artnet_cfg.get("ip", "127.0.0.1"))
+        self.artnet_port = int(artnet_cfg.get("port", 6454))
+        self.artnet_start_universe = int(artnet_cfg.get("start_universe", 0))
 
         pm = PaletteManager(self.logger)
 
@@ -154,6 +181,17 @@ class DmxController:
                 fixtures.append(fx)
             elif entry["type"] == "steady":
                 fx = YamlSteadyFixture(name=entry["name"], channels=entry["channels"])
+                fixtures.append(fx)
+            elif entry["type"] == "pixel_strip":
+                fx = YamlPixelStripFixture(
+                    name=entry["name"],
+                    palette_id=entry["palette"],
+                    start_channel=int(entry["start_channel"]),
+                    pixel_count=int(entry["pixel_count"]),
+                    color_order=str(entry.get("color_order", "rgb")),
+                    palette_mgr=pm,
+                )
+                pm.register_fixture(entry["palette"], fx)
                 fixtures.append(fx)
             else:
                 self.logger.warning(f"Unknown fixture type: {entry['type']}")
@@ -314,13 +352,21 @@ class DmxController:
 
             time.sleep(60)  # Retry connection every minute if disconnected
 
-    def _send_dmx(self, address: int, payload: bytes, name: str = "", log_update: bool = True, duration: Optional[float] = None):
-        if self.test_mode:
-            if log_update:
-                channels_str = ", ".join(f"[{address + i}]: {val}" for i, val in enumerate(payload))
-                self.logger.info(f"Update {name} -> {channels_str} (duration: {duration}s)")
+    def _send_dmx(self, address: int, payload: bytes, name: str = "", log_update: bool = True, duration: Optional[float] = None, is_artnet: bool = False):
+        if is_artnet:
+            if self.artnet_sender:
+                self.artnet_sender.send_message(address, payload, duration=duration)
+            elif self.test_mode:
+                if log_update:
+                    channels_str = ", ".join(f"[{address + i}]: {val}" for i, val in enumerate(payload))
+                    self.logger.info(f"Art-Net Update {name} -> {channels_str} (duration: {duration}s)")
         else:
-            self.dmx_sender.send_message(address, payload, duration=duration)
+            if self.test_mode:
+                if log_update:
+                    channels_str = ", ".join(f"[{address + i}]: {val}" for i, val in enumerate(payload))
+                    self.logger.info(f"Update {name} -> {channels_str} (duration: {duration}s)")
+            else:
+                self.dmx_sender.send_message(address, payload, duration=duration)
 
     def _start_animation_loop(self):
         self.logger.info("Starting DMX palette animation loop...")
@@ -331,7 +377,7 @@ class DmxController:
             try:
                 now = time.time()
                 for fx in self.dmx_fixtures:
-                    if type(fx).__name__ == "YamlRgbFixture":
+                    if type(fx).__name__ in ("YamlRgbFixture", "YamlPixelStripFixture"):
                         cfg = self.palette_mgr._palettes.get(fx.palette_id)
                         if cfg:
                             # Default speed from config
@@ -363,7 +409,7 @@ class DmxController:
                                 step_speed = speed * (total_steps / 10.0)
                                 offset = now * step_speed
                                 payload = fx.get_dmx_message(offset=offset)
-                                self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False)
+                                self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False, is_artnet=(type(fx).__name__ == "YamlPixelStripFixture"))
             except Exception as e:
                 self.logger.error("Error in animation loop: %s", e)
             time.sleep(0.04)  # ~25 FPS
@@ -398,7 +444,7 @@ class DmxController:
                         self.palette_mgr.update_from_hue_event(light)
                         for fx in self.palette_mgr.fixtures_for(pid):
                             payload = fx.get_dmx_message()
-                            self._send_dmx(fx.dmx_address, payload, fx.name)
+                            self._send_dmx(fx.dmx_address, payload, fx.name, is_artnet=(type(fx).__name__ == "YamlPixelStripFixture"))
                         continue
                         
                     with self._transitions_lock:
@@ -423,7 +469,7 @@ class DmxController:
                             self._active_transitions.pop(pid, None)
                     for fx in self.palette_mgr.fixtures_for(pid):
                         payload = fx.get_dmx_message()
-                        self._send_dmx(fx.dmx_address, payload, fx.name)
+                        self._send_dmx(fx.dmx_address, payload, fx.name, is_artnet=(type(fx).__name__ == "YamlPixelStripFixture"))
 
     def _run_palette_transition(self, pid, old_a, old_b, target_a, target_b, duration, cancel_event):
         self.logger.info(f"Starting wave transition for palette {pid} over {duration}s")
@@ -451,7 +497,7 @@ class DmxController:
             
             for fx in self.palette_mgr.fixtures_for(pid):
                 payload = fx.get_dmx_message(offset=offset)
-                self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False, duration=None)
+                self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False, duration=None, is_artnet=(type(fx).__name__ == "YamlPixelStripFixture"))
                 
             if t >= 1.0:
                 break
@@ -462,7 +508,7 @@ class DmxController:
             self.palette_mgr.update_palette_intermediate(pid, target_a, target_b)
             for fx in self.palette_mgr.fixtures_for(pid):
                 payload = fx.get_dmx_message(offset=0.0)
-                self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False, duration=None)
+                self._send_dmx(fx.dmx_address, payload, fx.name, log_update=False, duration=None, is_artnet=(type(fx).__name__ == "YamlPixelStripFixture"))
             self.logger.info(f"Wave transition for palette {pid} completed successfully.")
             
             with self._transitions_lock:
