@@ -20,7 +20,7 @@ class DmxSender:
         self.target_dmx_data = bytearray(513)
         self.channel_transition_time_remaining = [0.0] * 513
         self.transition_rate = 600.0  # units per second (covers 0-255 in ~425ms)
-        self.universe_size = max(128, max_channel + 1)
+        self.universe_size = min(513, max(128, max_channel + 1))
         self._running = False
         self._thread = None
         
@@ -140,8 +140,9 @@ class DmxSender:
         
         # 4. Sleep to let the FTDI chip fully shift out the 11 bits at 9600 baud.
         # 11 bits * (1/9600) = 1.146 milliseconds.
-        # A sleep of 1.3 ms is perfect to cover the full character.
-        time.sleep(0.0013)
+        # A sleep of 2.5 ms is used to ensure the Break byte has fully shifted out
+        # and the line is idle before changing the baudrate back to 250000.
+        time.sleep(0.0025)
         
         # 5. Switch baudrate to 250000 and send DMX data payload.
         ftdi_port.baudrate = 250000
