@@ -180,8 +180,9 @@ class DmxController:
                 pm.register_fixture(entry["palette"], fx)
                 fixtures.append(fx)
             elif entry["type"] == "steady":
-                fx = YamlSteadyFixture(name=entry["name"], channels=entry["channels"])
-                fixtures.append(fx)
+                for ch_str, val in entry["channels"].items():
+                    fx = YamlSteadyFixture(name=f"{entry['name']}_{ch_str}", channels={ch_str: val})
+                    fixtures.append(fx)
             elif entry["type"] == "pixel_strip":
                 fx = YamlPixelStripFixture(
                     name=entry["name"],
