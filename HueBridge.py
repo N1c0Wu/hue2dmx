@@ -75,10 +75,10 @@ class HueBridge:
             "Connection": "keep-alive",
             "Accept": "text/event-stream"
         }
-        with requests.get(self.api_url_events, headers=headers, stream=True, verify=False,
-                          timeout=self.timeout_sec) as response:
-            response.raise_for_status()
-            try:
+        try:
+            with requests.get(self.api_url_events, headers=headers, stream=True, verify=False,
+                              timeout=self.timeout_sec) as response:
+                response.raise_for_status()
                 buffer = ""
                 for line in response.iter_lines(decode_unicode=True):
                     if line:
@@ -90,9 +90,9 @@ class HueBridge:
                             if parsed:
                                 yield parsed
                         buffer = ""
-            except Exception as e:
-                # non-fatal: caller may simply call event_stream(...) again
-                self.logger.error("Lost connection to Hue bridge: %s", e)
+        except Exception as e:
+            # non-fatal: caller may simply call event_stream(...) again
+            self.logger.error("Lost connection to Hue bridge: %s", e)
 
     def parse_sse_event(self, sse_event: str) -> Dict[str, Any] | None:
         try:

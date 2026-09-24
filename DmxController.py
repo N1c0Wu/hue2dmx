@@ -260,98 +260,101 @@ class DmxController:
         """Listens for Hue bridge events and synchronizes updates with DMX fixtures."""
         self.logger.info("Start listening for Hue bridge events...")
         while True:
-            for event in self.hue_bridge.event_stream():
-                if event["type"] == "update":
-                    if not self.running_as_service:
-                        self.logger.info(json.dumps(event, indent=4))
-                    
-                    if self._contains_button_short_release(event):
-                        self.logger.info("Button short release detected. Refreshing cache and syncing all lights...")
-                        for lid in self.palette_mgr._lamp_to_palette_ids.keys():
-                            if not lid:
+            try:
+                for event in self.hue_bridge.event_stream():
+                    if event.get("type") == "update":
+                        if not self.running_as_service:
+                            self.logger.info(json.dumps(event, indent=4))
+                        
+                        if self._contains_button_short_release(event):
+                            self.logger.info("Button short release detected. Refreshing cache and syncing all lights...")
+                            for lid in self.palette_mgr._lamp_to_palette_ids.keys():
+                                if not lid:
+                                    continue
+                                try:
+                                    light = self.hue_bridge.get_light(lid)
+                                    self._cached_lights[lid] = light
+                                    self._handle_hue_light_event(light)
+                                except Exception as e:
+                                    self.logger.warning("Failed to refresh state for %s: %s", lid, e)
+                            continue
+
+                        # Process updates by applying deltas locally to cached models
+                        for item in event.get("data", []):
+                            lid = item.get("id")
+                            if not lid or lid not in self.palette_mgr._lamp_to_palette_ids:
                                 continue
-                            try:
-                                light = self.hue_bridge.get_light(lid)
-                                self._cached_lights[lid] = light
-                                self._handle_hue_light_event(light)
-                            except Exception as e:
-                                self.logger.warning("Failed to refresh state for %s: %s", lid, e)
-                        continue
+                            
+                            light = self._cached_lights.get(lid)
+                            if not light:
+                                continue
+                            
+                            # Apply deltas from the SSE event directly to our cached light model
+                            updated = False
+                            if "color" in item and "xy" in item["color"]:
+                                light._color_mode = "color"
+                                if light.color and light.color.xy:
+                                    light.color.xy.x = item["color"]["xy"].get("x", light.color.xy.x)
+                                    light.color.xy.y = item["color"]["xy"].get("y", light.color.xy.y)
+                                    updated = True
+                                elif not light.color:
+                                    light.color = Color(xy=Point(x=item["color"]["xy"].get("x", 0.0), y=item["color"]["xy"].get("y", 0.0)))
+                                    updated = True
+                            if "color_temperature" in item and "mirek" in item["color_temperature"]:
+                                light._color_mode = "color_temperature"
+                                if light.color_temperature:
+                                    light.color_temperature.mirek = item["color_temperature"].get("mirek", light.color_temperature.mirek)
+                                    updated = True
+                                elif not light.color_temperature:
+                                    light.color_temperature = ColorTemperature(mirek=item["color_temperature"].get("mirek"))
+                                    updated = True
+                            if "dimming" in item and "brightness" in item["dimming"]:
+                                if light.dimming:
+                                    light.dimming.brightness = item["dimming"].get("brightness", light.dimming.brightness)
+                                    updated = True
+                                elif not light.dimming:
+                                    light.dimming = Dimming(brightness=item["dimming"].get("brightness", 100.0))
+                                    updated = True
+                            if "on" in item and "on" in item["on"]:
+                                if light.on:
+                                    light.on.on = item["on"].get("on", light.on.on)
+                                    updated = True
+                                elif not light.on:
+                                    light.on = On(on=item["on"].get("on", False))
+                                    updated = True
+                            if "effects" in item and "status" in item["effects"]:
+                                if light.effects:
+                                    light.effects.status = item["effects"].get("status", light.effects.status)
+                                    updated = True
+                                elif not light.effects:
+                                    light.effects = Effects(status=item["effects"].get("status", "no_effect"), status_values=[], effect_values=[])
+                                    updated = True
+                            if "dynamics" in item:
+                                if light.dynamics:
+                                    light.dynamics.status = item["dynamics"].get("status", light.dynamics.status)
+                                    light.dynamics.speed = item["dynamics"].get("speed", light.dynamics.speed)
+                                    if "duration" in item["dynamics"]:
+                                        light.dynamics.duration = item["dynamics"]["duration"]
+                                    updated = True
+                                elif not light.dynamics:
+                                    light.dynamics = Dynamics(
+                                        status=item["dynamics"].get("status", "none"),
+                                        status_values=[],
+                                        speed=item["dynamics"].get("speed", 0.0),
+                                        speed_valid=False,
+                                        duration=item["dynamics"].get("duration")
+                                    )
+                                    updated = True
+                            
+                            if updated:
+                                try:
+                                    self._handle_hue_light_event(light)
+                                except Exception as e:
+                                    self.logger.warning("Failed to handle event for %s: %s", lid, e)
+            except Exception as e:
+                self.logger.error("Error in Hue event loop: %s", e)
 
-                    # Process updates by applying deltas locally to cached models
-                    for item in event.get("data", []):
-                        lid = item.get("id")
-                        if not lid or lid not in self.palette_mgr._lamp_to_palette_ids:
-                            continue
-                        
-                        light = self._cached_lights.get(lid)
-                        if not light:
-                            continue
-                        
-                        # Apply deltas from the SSE event directly to our cached light model
-                        updated = False
-                        if "color" in item and "xy" in item["color"]:
-                            light._color_mode = "color"
-                            if light.color and light.color.xy:
-                                light.color.xy.x = item["color"]["xy"].get("x", light.color.xy.x)
-                                light.color.xy.y = item["color"]["xy"].get("y", light.color.xy.y)
-                                updated = True
-                            elif not light.color:
-                                light.color = Color(xy=Point(x=item["color"]["xy"].get("x", 0.0), y=item["color"]["xy"].get("y", 0.0)))
-                                updated = True
-                        if "color_temperature" in item and "mirek" in item["color_temperature"]:
-                            light._color_mode = "color_temperature"
-                            if light.color_temperature:
-                                light.color_temperature.mirek = item["color_temperature"].get("mirek", light.color_temperature.mirek)
-                                updated = True
-                            elif not light.color_temperature:
-                                light.color_temperature = ColorTemperature(mirek=item["color_temperature"].get("mirek"))
-                                updated = True
-                        if "dimming" in item and "brightness" in item["dimming"]:
-                            if light.dimming:
-                                light.dimming.brightness = item["dimming"].get("brightness", light.dimming.brightness)
-                                updated = True
-                            elif not light.dimming:
-                                light.dimming = Dimming(brightness=item["dimming"].get("brightness", 100.0))
-                                updated = True
-                        if "on" in item and "on" in item["on"]:
-                            if light.on:
-                                light.on.on = item["on"].get("on", light.on.on)
-                                updated = True
-                            elif not light.on:
-                                light.on = On(on=item["on"].get("on", False))
-                                updated = True
-                        if "effects" in item and "status" in item["effects"]:
-                            if light.effects:
-                                light.effects.status = item["effects"].get("status", light.effects.status)
-                                updated = True
-                            elif not light.effects:
-                                light.effects = Effects(status=item["effects"].get("status", "no_effect"), status_values=[], effect_values=[])
-                                updated = True
-                        if "dynamics" in item:
-                            if light.dynamics:
-                                light.dynamics.status = item["dynamics"].get("status", light.dynamics.status)
-                                light.dynamics.speed = item["dynamics"].get("speed", light.dynamics.speed)
-                                if "duration" in item["dynamics"]:
-                                    light.dynamics.duration = item["dynamics"]["duration"]
-                                updated = True
-                            elif not light.dynamics:
-                                light.dynamics = Dynamics(
-                                    status=item["dynamics"].get("status", "none"),
-                                    status_values=[],
-                                    speed=item["dynamics"].get("speed", 0.0),
-                                    speed_valid=False,
-                                    duration=item["dynamics"].get("duration")
-                                )
-                                updated = True
-                        
-                        if updated:
-                            try:
-                                self._handle_hue_light_event(light)
-                            except Exception as e:
-                                self.logger.warning("Failed to handle event for %s: %s", lid, e)
-
-            time.sleep(60)  # Retry connection every minute if disconnected
+            time.sleep(5)  # Retry connection every 5 seconds if disconnected
 
     def _send_dmx(self, address: int, payload: bytes, name: str = "", log_update: bool = True, duration: Optional[float] = None, is_artnet: bool = False):
         if is_artnet:
