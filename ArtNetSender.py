@@ -44,64 +44,67 @@ class ArtNetSender:
         self.logger.info("Started Art-Net transmission loop.")
 
     def _transmit_loop(self):
-        try:
-            # Initialize current state to match target state to avoid fading in on startup
-            self.dmx_data = bytearray(self.target_dmx_data)
-            
-            last_time = time.time()
-            while self._running:
-                now = time.time()
-                dt = now - last_time
-                last_time = now
+        while self._running:
+            try:
+                # Initialize current state to match target state to avoid fading in on startup
+                self.dmx_data = bytearray(self.target_dmx_data)
                 
-                # Interpolate current values towards targets
-                for i in range(len(self.dmx_data)):
-                    cur = self.dmx_data[i]
-                    tar = self.target_dmx_data[i]
-                    if cur != tar:
-                        rem_time = self.channel_transition_time_remaining[i]
-                        if rem_time > 0.0:
-                            if dt >= rem_time:
-                                self.dmx_data[i] = tar
-                                self.channel_transition_time_remaining[i] = 0.0
+                last_time = time.time()
+                while self._running:
+                    now = time.time()
+                    dt = now - last_time
+                    last_time = now
+                    
+                    # Interpolate current values towards targets
+                    for i in range(len(self.dmx_data)):
+                        cur = self.dmx_data[i]
+                        tar = self.target_dmx_data[i]
+                        if cur != tar:
+                            rem_time = self.channel_transition_time_remaining[i]
+                            if rem_time > 0.0:
+                                if dt >= rem_time:
+                                    self.dmx_data[i] = tar
+                                    self.channel_transition_time_remaining[i] = 0.0
+                                else:
+                                    diff = tar - cur
+                                    step = diff * (dt / rem_time)
+                                    new_val = cur + step
+                                    if diff > 0:
+                                        self.dmx_data[i] = min(tar, max(cur + 1, int(new_val)))
+                                    else:
+                                        self.dmx_data[i] = max(tar, min(cur - 1, int(new_val)))
+                                    self.channel_transition_time_remaining[i] = rem_time - dt
                             else:
+                                rate = self.transition_rate * dt
                                 diff = tar - cur
-                                step = diff * (dt / rem_time)
-                                new_val = cur + step
-                                if diff > 0:
-                                    self.dmx_data[i] = min(tar, max(cur + 1, int(new_val)))
+                                if abs(diff) <= rate:
+                                    self.dmx_data[i] = tar
                                 else:
-                                    self.dmx_data[i] = max(tar, min(cur - 1, int(new_val)))
-                                self.channel_transition_time_remaining[i] = rem_time - dt
-                        else:
-                            rate = self.transition_rate * dt
-                            diff = tar - cur
-                            if abs(diff) <= rate:
-                                self.dmx_data[i] = tar
-                            else:
-                                if diff > 0:
-                                    self.dmx_data[i] = int(cur + rate)
-                                else:
-                                    self.dmx_data[i] = int(cur - rate)
-                                
-                for u in range(self.universe_count):
-                    start_idx = u * 512 + 1
-                    end_idx = start_idx + 512
-                    dmx_slice = self.dmx_data[start_idx:end_idx]
-                    
-                    # Art-Net Header
-                    header = b'Art-Net\x00' + struct.pack('<H', 0x5000) + struct.pack('>H', 14)
-                    universe = self.start_universe + u
-                    packet = header + b'\x00\x00' + struct.pack('>H', universe) + struct.pack('>H', 512) + bytes(dmx_slice)
-                    
-                    try:
-                        self.sock.sendto(packet, (self.ip, self.port))
-                    except Exception as e:
-                        self.logger.error("Error sending Art-Net packet: %s", e)
+                                    if diff > 0:
+                                        self.dmx_data[i] = int(cur + rate)
+                                    else:
+                                        self.dmx_data[i] = int(cur - rate)
+                                    
+                    for u in range(self.universe_count):
+                        start_idx = u * 512 + 1
+                        end_idx = start_idx + 512
+                        dmx_slice = self.dmx_data[start_idx:end_idx]
                         
-                time.sleep(0.025)  # roughly 40Hz
-        except Exception as e:
-            self.logger.error("Art-Net transmit loop crashed: %s", e)
+                        # Art-Net Header
+                        header = b'Art-Net\x00' + struct.pack('<H', 0x5000) + struct.pack('>H', 14)
+                        universe = self.start_universe + u
+                        packet = header + b'\x00\x00' + struct.pack('>H', universe) + struct.pack('>H', 512) + bytes(dmx_slice)
+                        
+                        try:
+                            self.sock.sendto(packet, (self.ip, self.port))
+                        except Exception as e:
+                            self.logger.error("Error sending Art-Net packet: %s", e)
+                            
+                    time.sleep(0.025)  # roughly 40Hz
+            except Exception as e:
+                self.logger.error("Art-Net transmit loop error: %s. Retrying in 2 seconds...", e)
+                if self._running:
+                    time.sleep(2.0)
 
     def send_message(self, address: int, data: bytes, duration: Optional[float] = None):
         # Update target buffer! The transmit loop will smoothly interpolate towards it.

@@ -118,6 +118,7 @@ class DmxController:
         )
         self._validate_fixtures()
         self._start_animation_loop()
+        self._force_initial_dmx()
 
     def _load_from_yaml(self):
         yaml_path = os.getenv("FIXTURES_YAML")

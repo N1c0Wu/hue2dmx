@@ -30,29 +30,58 @@ class DmxSender:
 
     def init_ftdi_driver(self):
         try:
+            self.ftdi_serial = self._find_ftdi_serial()
+            if self.ftdi_serial:
+                self.logger.info("Found FTDI port with serial %s", self.ftdi_serial)
+            else:
+                self.logger.warning("No FTDI device with a valid serial found initially; will retry in transmit loop")
+        except Exception as e:
+            self.logger.warning("Error initializing FTDI driver: %s. Will retry in transmit loop", e)
+
+    def _find_ftdi_serial(self) -> Optional[str]:
+        try:
             driver = Driver()
             devices = driver.list_devices()
             if not devices:
-                self.logger.error("No FTDI devices found")
-                sys.exit(1)
+                return None
             for device in devices:
                 manufacturer, description, serial = device
-                if manufacturer == "FTDI":
-                    if serial:
-                        self.logger.info(f"Found FTDI port with serial {serial}")
-                        self.ftdi_serial = serial
-                        break
-                    else:
-                        self.logger.error("Serial number not available, eeprom may need to be reprogrammed (see 'eeprom' folder)")
-                        sys.exit(1)
-
-            if not self.ftdi_serial:
-                self.logger.error("No FTDI devices with a valid serial found")
-                sys.exit(1)
-
+                if manufacturer == "FTDI" and serial:
+                    return serial
+            for device in devices:
+                _, _, serial = device
+                if serial:
+                    return serial
         except Exception as e:
-            self.logger.error("Error initializing FTDI driver: %s", e)
-            sys.exit(1)
+            self.logger.warning("Error listing FTDI devices: %s", e)
+        return None
+
+    def _open_device(self) -> Device:
+        """
+        Attempts to open the FTDI device.
+        Tries opening with serial number first; if that fails (e.g. descriptor read race),
+        falls back to opening the default/first FTDI device.
+        """
+        if not self.ftdi_serial:
+            self.ftdi_serial = self._find_ftdi_serial()
+
+        # 1. Attempt opening with serial if detected
+        if self.ftdi_serial:
+            try:
+                return Device(device_id=self.ftdi_serial)
+            except Exception as e:
+                self.logger.warning(
+                    "Could not open FTDI device with serial '%s' (%s), trying default device...",
+                    self.ftdi_serial, e
+                )
+
+        # 2. Attempt opening default device (device_index=0)
+        try:
+            return Device()
+        except Exception as e:
+            # Refresh serial for subsequent attempts
+            self.ftdi_serial = self._find_ftdi_serial()
+            raise e
 
     def _start_loop(self):
         self._running = True
@@ -61,17 +90,21 @@ class DmxSender:
         self.logger.info("Started DMX transmission loop.")
 
     def _transmit_loop(self):
-        try:
-            with Device(self.ftdi_serial) as ftdi_port:
+        while self._running:
+            ftdi_port = None
+            try:
+                ftdi_port = self._open_device()
+                self.logger.info("DMX transmission loop successfully connected to FTDI device.")
+
                 # Initialize current state to match target state to avoid fading in on startup
                 self.dmx_data = bytearray(self.target_dmx_data)
-                
                 last_time = time.time()
+
                 while self._running:
                     now = time.time()
                     dt = now - last_time
                     last_time = now
-                    
+
                     # Interpolate current values towards targets
                     for i in range(len(self.dmx_data)):
                         cur = self.dmx_data[i]
@@ -101,11 +134,21 @@ class DmxSender:
                                         self.dmx_data[i] = int(cur + rate)
                                     else:
                                         self.dmx_data[i] = int(cur - rate)
-                                    
+
                     self.send_dmx_packet(ftdi_port, self.dmx_data[:self.universe_size])
                     time.sleep(0.025)  # roughly 40Hz
-        except Exception as e:
-            self.logger.error("DMX transmit loop crashed: %s", e)
+
+            except Exception as e:
+                self.logger.error("DMX transmission loop error: %s. Retrying in 2 seconds...", e)
+            finally:
+                if ftdi_port is not None:
+                    try:
+                        ftdi_port.close()
+                    except Exception:
+                        pass
+
+            if self._running:
+                time.sleep(2.0)
 
     def send_message(self, address: int, data: bytes, duration: Optional[float] = None):
         if self.stub_mode:
@@ -113,7 +156,6 @@ class DmxSender:
             self.target_dmx_data[address:address + len(data)] = data
             self.dmx_data[address:address + len(data)] = data
             return
-        assert self.ftdi_serial, "FTDI driver is not initialized"
         # Update target buffer! The transmit loop will smoothly interpolate towards it.
         self.target_dmx_data[address:address + len(data)] = data
         for i in range(len(data)):
