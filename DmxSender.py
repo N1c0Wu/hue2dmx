@@ -1,13 +1,15 @@
 """
 Copyright (c) 2023 Tom Kalmijn / MIT License.
 """
+import os
+import glob
+import subprocess
 import sys
 import time
 from logging import Logger
 
 from pylibftdi import Device, Driver
 from typing import Optional
-
 
 import threading
 
@@ -56,6 +58,27 @@ class DmxSender:
             self.logger.warning("Error listing FTDI devices: %s", e)
         return None
 
+    def _detach_kernel_driver(self):
+        """Attempts to unload ftdi_sio or unbind USB interfaces if the Linux kernel driver claimed the device."""
+        try:
+            subprocess.run(["sudo", "rmmod", "ftdi_sio"], capture_output=True, timeout=2)
+        except Exception:
+            pass
+
+        try:
+            for path in glob.glob("/sys/bus/usb/drivers/ftdi_sio/*:*"):
+                dev_name = os.path.basename(path)
+                try:
+                    with open("/sys/bus/usb/drivers/ftdi_sio/unbind", "w") as f:
+                        f.write(dev_name)
+                except Exception:
+                    try:
+                        subprocess.run(["sudo", "sh", "-c", f"echo '{dev_name}' > /sys/bus/usb/drivers/ftdi_sio/unbind"], capture_output=True, timeout=2)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     def _open_device(self) -> Device:
         """
         Attempts to open the FTDI device.
@@ -79,6 +102,14 @@ class DmxSender:
         try:
             return Device()
         except Exception as e:
+            # If the kernel driver is claiming the device (-5), attempt detachment
+            if "-5" in str(e) or "claim" in str(e).lower():
+                self.logger.info("Kernel driver conflict detected (-5). Attempting to unload ftdi_sio...")
+                self._detach_kernel_driver()
+                try:
+                    return Device()
+                except Exception:
+                    pass
             # Refresh serial for subsequent attempts
             self.ftdi_serial = self._find_ftdi_serial()
             raise e
